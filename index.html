@@ -1,0 +1,476 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>StudioThumb - Editor Profesional de Miniaturas</title>
+  <meta name="description" content="Diseña textos de impacto para tus thumbnails de YouTube con precisión de píxel.">
+  
+  <!-- CSS Stylesheet -->
+  <link rel="stylesheet" href="style.css">
+  
+  <!-- Google Fonts for UI -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;900&display=swap" rel="stylesheet">
+  
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+
+  <!-- Top Toolbar -->
+  <header class="toolbar">
+    <div class="brand">
+      <i data-lucide="sparkles"></i>
+      <span>StudioThumb</span>
+    </div>
+    
+    <!-- Editor actions -->
+    <div class="actions-group">
+      <button id="btn-load-bg" class="btn" title="Cargar Imagen de Fondo">
+        <i data-lucide="image"></i> Cargar Fondo
+        <input type="file" id="bg-file-input" accept="image/*" style="display: none;">
+      </button>
+      
+      <button id="btn-add-text" class="btn btn-primary" title="Añadir Capa de Texto">
+        <i data-lucide="type"></i> Añadir Texto
+      </button>
+
+      <div style="width: 1px; height: 24px; background: var(--border); margin: 0 5px;"></div>
+
+      <button id="btn-undo" class="btn" title="Deshacer (Cmd+Z)" disabled>
+        <i data-lucide="undo-2"></i>
+      </button>
+      <button id="btn-redo" class="btn" title="Rehacer (Cmd+Shift+Z)" disabled>
+        <i data-lucide="redo-2"></i>
+      </button>
+    </div>
+
+    <!-- Zoom & Screen control -->
+    <div class="actions-group">
+      <div class="zoom-container">
+        <button id="btn-zoom-out" class="zoom-btn" title="Zoom Out">-</button>
+        <select id="zoom-select" class="zoom-select">
+          <option value="fit">Ajustar</option>
+          <option value="0.25">25%</option>
+          <option value="0.5">50%</option>
+          <option value="1">100%</option>
+          <option value="2">200%</option>
+          <option value="4">400%</option>
+          <option value="8">800%</option>
+        </select>
+        <button id="btn-zoom-in" class="zoom-btn" title="Zoom In">+</button>
+      </div>
+      
+      <div style="width: 1px; height: 24px; background: var(--border); margin: 0 5px;"></div>
+
+      <!-- Export Panel -->
+      <button id="btn-export-png" class="btn btn-primary" title="Exportar en PNG de Alta Calidad">
+        <i data-lucide="download"></i> Exportar PNG
+      </button>
+      
+      <button id="btn-export-jpg" class="btn" title="Exportar en JPG">
+        JPG
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Editor workspace -->
+  <main class="main-container">
+    
+    <!-- Sidebar Left: Layers -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <span>Capas</span>
+        <button id="btn-delete-layer" class="layer-action-btn" title="Eliminar Capa" disabled>
+          <i data-lucide="trash-2"></i>
+        </button>
+      </div>
+      <div class="sidebar-content">
+        <div id="layers-list" class="layers-list">
+          <!-- Dynamically filled with JS -->
+          <div class="layer-item-placeholder" style="color: var(--text-muted); font-size: 0.8rem; text-align: center; margin-top: 20px;">
+            No hay capas de texto. Haz clic en "Añadir Texto"
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Center Workspace Canvas area -->
+    <div id="workspace-viewport" class="workspace" tabindex="0">
+      
+      <!-- Top & Left Rulers (simple visual grid guide helpers) -->
+      <!-- <div class="ruler ruler-h" id="ruler-h"></div> -->
+      <!-- <div class="ruler ruler-v" id="ruler-v"></div> -->
+      
+      <!-- Scaled Canvas container -->
+      <div id="canvas-container" class="canvas-container">
+        <!-- Main Graphic Canvas -->
+        <canvas id="canvas"></canvas>
+        
+        <!-- Interactive Overlay for selection handles, borders, guidelines -->
+        <div id="interaction-overlay" class="interaction-overlay"></div>
+        
+        <!-- In-place typing editor overlay -->
+        <textarea id="in-place-editor" class="in-place-textarea hidden" spellcheck="false"></textarea>
+      </div>
+    </div>
+
+    <!-- Sidebar Right: Properties Inspector -->
+    <aside class="sidebar sidebar-right">
+      <div class="sidebar-header">
+        <span>Propiedades</span>
+      </div>
+      <div class="sidebar-content">
+        <div id="properties-panel" class="properties-panel-content">
+          
+          <!-- Empty State message -->
+          <div id="properties-empty-state" style="color: var(--text-muted); font-size: 0.85rem; text-align: center; margin-top: 40px;">
+            Selecciona una capa de texto para editar sus propiedades.
+          </div>
+
+          <!-- Active properties controls, visible when layer selected -->
+          <div id="properties-controls" class="hidden">
+            
+            <!-- Posicionamiento -->
+            <div class="section-title">Posicionamiento</div>
+            <div class="control-row">
+              <div class="control-group">
+                <label for="prop-x">Posición X (px)</label>
+                <input type="number" id="prop-x" class="input-field">
+              </div>
+              <div class="control-group">
+                <label for="prop-y">Posición Y (px)</label>
+                <input type="number" id="prop-y" class="input-field">
+              </div>
+            </div>
+            
+            <div class="control-row">
+              <div class="control-group">
+                <label for="prop-rotation">Rotación (°)</label>
+                <input type="number" id="prop-rotation" class="input-field" min="0" max="360">
+              </div>
+              <div class="control-group">
+                <label for="prop-font-size">Tamaño Fuente</label>
+                <input type="number" id="prop-font-size-num" class="input-field" min="6" max="300">
+              </div>
+            </div>
+
+            <!-- Tipografía -->
+            <div class="section-title">Tipografía</div>
+            <div class="control-group">
+              <label for="prop-font-family">Familia de Fuente</label>
+              <select id="prop-font-family" class="input-field">
+                <optgroup label="Fuentes Google (Thumbnails)">
+                  <!-- Loaded dynamically from fonts.js -->
+                </optgroup>
+                <optgroup label="Fuentes del Sistema">
+                  <!-- Loaded dynamically from fonts.js -->
+                </optgroup>
+              </select>
+            </div>
+
+            <div class="control-row">
+              <div class="control-group">
+                <label for="prop-font-weight">Grosor</label>
+                <select id="prop-font-weight" class="input-field">
+                  <option value="normal">Normal (400)</option>
+                  <option value="bold">Negrita (700)</option>
+                  <option value="900">Extrabold (900)</option>
+                </select>
+              </div>
+              <div class="control-group">
+                <label>Alineación</label>
+                <div class="alignment-group">
+                  <button class="align-btn" data-align="left" title="Izquierda"><i data-lucide="align-left"></i></button>
+                  <button class="align-btn" data-align="center" title="Centro"><i data-lucide="align-center"></i></button>
+                  <button class="align-btn" data-align="right" title="Derecha"><i data-lucide="align-right"></i></button>
+                </div>
+              </div>
+            </div>
+
+            <div class="control-row">
+              <div class="control-group">
+                <label>Estilos rápidos</label>
+                <div style="display: flex; gap: 8px;">
+                  <button id="prop-italic" class="btn-font-style" title="Itálica">I</button>
+                </div>
+              </div>
+              <div class="control-group">
+                <label for="prop-letter-spacing">Espaciado Letras</label>
+                <div class="range-container">
+                  <input type="range" id="prop-letter-spacing" class="range-input" min="-10" max="40" value="0">
+                  <span id="val-letter-spacing" class="range-val">0</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="control-group">
+              <label for="prop-line-height">Interlineado</label>
+              <div class="range-container">
+                <input type="range" id="prop-line-height" class="range-input" min="0.8" max="2.5" step="0.1" value="1.2">
+                <span id="val-line-height" class="range-val">1.2</span>
+              </div>
+            </div>
+
+            <!-- Color y Relleno -->
+            <div class="section-title">Color de Relleno</div>
+            <div class="control-group">
+              <div class="color-picker-wrapper">
+                <div id="fill-color-preview" class="color-preview-btn">
+                  <input type="color" id="prop-fill-color" class="color-input-hidden">
+                </div>
+                <input type="text" id="prop-fill-color-hex" class="color-text-input" placeholder="#FFFFFF">
+              </div>
+              
+              <!-- Presets -->
+              <div class="preset-colors" data-picker="fill">
+                <div class="preset-color" style="background-color: #ffffff;" data-color="#ffffff"></div>
+                <div class="preset-color" style="background-color: #ff0000;" data-color="#ff0000"></div>
+                <div class="preset-color" style="background-color: #ffde00;" data-color="#ffde00"></div>
+                <div class="preset-color" style="background-color: #00ff00;" data-color="#00ff00"></div>
+                <div class="preset-color" style="background-color: #00ffff;" data-color="#00ffff"></div>
+                <div class="preset-color" style="background-color: #0088ff;" data-color="#0088ff"></div>
+                <div class="preset-color" style="background-color: #ff007f;" data-color="#ff007f"></div>
+                <div class="preset-color" style="background-color: #000000;" data-color="#000000"></div>
+              </div>
+            </div>
+
+            <!-- Contorno (Stroke) -->
+            <div class="section-title">
+              <span>Contorno</span>
+              <div class="switch-container">
+                <label class="switch">
+                  <input type="checkbox" id="prop-stroke-enable">
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div id="stroke-settings-block" class="hidden">
+              <div class="control-group">
+                <label for="prop-stroke-width">Grosor de Borde</label>
+                <div class="range-container">
+                  <input type="range" id="prop-stroke-width" class="range-input" min="1" max="40" value="5">
+                  <span id="val-stroke-width" class="range-val">5</span>
+                </div>
+              </div>
+              <div class="control-group">
+                <div class="color-picker-wrapper">
+                  <div id="stroke-color-preview" class="color-preview-btn">
+                    <input type="color" id="prop-stroke-color" class="color-input-hidden">
+                  </div>
+                  <input type="text" id="prop-stroke-color-hex" class="color-text-input" placeholder="#000000">
+                </div>
+              </div>
+            </div>
+
+            <!-- Sombra (Drop Shadow) -->
+            <div class="section-title">
+              <span>Sombra de Caída</span>
+              <div class="switch-container">
+                <label class="switch">
+                  <input type="checkbox" id="prop-shadow-enable">
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div id="shadow-settings-block" class="hidden">
+              <div class="control-group">
+                <div class="color-picker-wrapper">
+                  <div id="shadow-color-preview" class="color-preview-btn">
+                    <input type="color" id="prop-shadow-color" class="color-input-hidden">
+                  </div>
+                  <input type="text" id="prop-shadow-color-hex" class="color-text-input" placeholder="rgba(0,0,0,0.5)">
+                </div>
+              </div>
+              <div class="control-group">
+                <label for="prop-shadow-blur">Difuminado</label>
+                <div class="range-container">
+                  <input type="range" id="prop-shadow-blur" class="range-input" min="0" max="50" value="10">
+                  <span id="val-shadow-blur" class="range-val">10</span>
+                </div>
+              </div>
+              <div class="control-row">
+                <div class="control-group">
+                  <label for="prop-shadow-offset-x">Desviación X</label>
+                  <input type="number" id="prop-shadow-offset-x" class="input-field" value="5">
+                </div>
+                <div class="control-group">
+                  <label for="prop-shadow-offset-y">Desviación Y</label>
+                  <input type="number" id="prop-shadow-offset-y" class="input-field" value="5">
+                </div>
+              </div>
+            </div>
+
+            <!-- Resplandor (Glow) -->
+            <div class="section-title">
+              <span>Resplandor (Glow)</span>
+              <div class="switch-container">
+                <label class="switch">
+                  <input type="checkbox" id="prop-glow-enable">
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div id="glow-settings-block" class="hidden">
+              <div class="control-group">
+                <div class="color-picker-wrapper">
+                  <div id="glow-color-preview" class="color-preview-btn">
+                    <input type="color" id="prop-glow-color" class="color-input-hidden">
+                  </div>
+                  <input type="text" id="prop-glow-color-hex" class="color-text-input" placeholder="#FF007F">
+                </div>
+              </div>
+              <div class="control-group">
+                <label for="prop-glow-blur">Fuerza / Difuminado</label>
+                <div class="range-container">
+                  <input type="range" id="prop-glow-blur" class="range-input" min="5" max="80" value="20">
+                  <span id="val-glow-blur" class="range-val">20</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Fondo Panel de Texto -->
+            <div class="section-title">
+              <span>Panel de Fondo</span>
+              <div class="switch-container">
+                <label class="switch">
+                  <input type="checkbox" id="prop-bg-enable">
+                  <span class="slider"></span>
+                </label>
+              </div>
+            </div>
+            <div id="bg-settings-block" class="hidden">
+              <div class="control-group">
+                <div class="color-picker-wrapper">
+                  <div id="bg-color-preview" class="color-preview-btn">
+                    <input type="color" id="prop-bg-color" class="color-input-hidden">
+                  </div>
+                  <input type="text" id="prop-bg-color-hex" class="color-text-input" placeholder="#000000">
+                </div>
+              </div>
+              <div class="control-row">
+                <div class="control-group">
+                  <label for="prop-bg-opacity">Opacidad</label>
+                  <div class="range-container">
+                    <input type="range" id="prop-bg-opacity" class="range-input" min="0" max="1" step="0.05" value="0.7">
+                    <span id="val-bg-opacity" class="range-val">0.7</span>
+                  </div>
+                </div>
+                <div class="control-group">
+                  <label for="prop-bg-padding">Margen (Padding)</label>
+                  <div class="range-container">
+                    <input type="range" id="prop-bg-padding" class="range-input" min="0" max="60" value="15">
+                    <span id="val-bg-padding" class="range-val">15</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Fondo / Canvas General Settings (always visible at bottom or when background selected) -->
+          <div class="section-title" style="margin-top: 30px;">Ajustes de Fondo</div>
+          
+          <div id="bg-image-filters-block" class="hidden">
+            <div class="control-group">
+              <label for="prop-bg-image-opacity">Opacidad Imagen</label>
+              <div class="range-container">
+                <input type="range" id="prop-bg-image-opacity" class="range-input" min="0" max="100" value="100">
+                <span id="val-bg-image-opacity" class="range-val">100%</span>
+              </div>
+            </div>
+            <div class="control-group">
+              <label for="prop-bg-image-blur">Desfoque (Blur)</label>
+              <div class="range-container">
+                <input type="range" id="prop-bg-image-blur" class="range-input" min="0" max="30" value="0">
+                <span id="val-bg-image-blur" class="range-val">0px</span>
+              </div>
+            </div>
+            <div class="control-row">
+              <div class="control-group">
+                <label for="prop-bg-image-brightness">Brillo</label>
+                <div class="range-container">
+                  <input type="range" id="prop-bg-image-brightness" class="range-input" min="50" max="150" value="100">
+                  <span id="val-bg-image-brightness" class="range-val">100%</span>
+                </div>
+              </div>
+              <div class="control-group">
+                <label for="prop-bg-image-contrast">Contraste</label>
+                <div class="range-container">
+                  <input type="range" id="prop-bg-image-contrast" class="range-input" min="50" max="150" value="100">
+                  <span id="val-bg-image-contrast" class="range-val">100%</span>
+                </div>
+              </div>
+            </div>
+            <div class="control-row">
+              <div class="control-group">
+                <label for="prop-bg-image-saturate">Saturación</label>
+                <div class="range-container">
+                  <input type="range" id="prop-bg-image-saturate" class="range-input" min="0" max="200" value="100">
+                  <span id="val-bg-image-saturate" class="range-val">100%</span>
+                </div>
+              </div>
+              <div class="control-group">
+                <label for="prop-bg-image-scale">Ajuste Escala</label>
+                <select id="prop-bg-image-scale" class="input-field">
+                  <option value="cover">Rellenar (Cover)</option>
+                  <option value="contain">Contener (Contain)</option>
+                </select>
+              </div>
+            </div>
+            
+            <button id="btn-remove-bg" class="btn btn-danger" style="width: 100%; justify-content: center; margin-top: 6px;">
+              <i data-lucide="x"></i> Eliminar Imagen de Fondo
+            </button>
+          </div>
+
+          <div id="bg-image-empty-filters" style="color: var(--text-muted); font-size: 0.8rem; text-align: center; border: 1px dashed var(--border); padding: 16px; border-radius: 6px;">
+            Sin imagen de fondo. Haz clic en "Cargar Fondo" en la barra superior.
+          </div>
+
+          <!-- Snapping Controls -->
+          <div class="section-title" style="margin-top: 30px;">Ajustes de Alineación</div>
+          <div class="switch-container">
+            <label for="prop-snap-guides">Guías Inteligentes</label>
+            <label class="switch">
+              <input type="checkbox" id="prop-snap-guides" checked>
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="switch-container">
+            <label for="prop-snap-grid">Ajustar a la Cuadrícula</label>
+            <label class="switch">
+              <input type="checkbox" id="prop-snap-grid">
+              <span class="slider"></span>
+            </label>
+          </div>
+          <div class="control-group" id="grid-size-block" class="hidden">
+            <label for="prop-grid-size">Tamaño de Cuadrícula (px)</label>
+            <div class="range-container">
+              <input type="range" id="prop-grid-size" class="range-input" min="5" max="100" value="20">
+              <span id="val-grid-size" class="range-val">20</span>
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Bottom Status bar -->
+  <footer class="status-bar">
+    <div class="status-left">
+      <span>Coordenadas: <span id="coord-display">X: 0, Y: 0</span></span>
+      <span>Tamaño: 1280x720 (HD 16:9)</span>
+    </div>
+    <div class="status-right">
+      <span>Atajos: Espacio + Arrastrar (Pan) | Ctrl+Z (Deshacer) | Doble clic para Editar</span>
+    </div>
+  </footer>
+
+  <!-- Application Entry script -->
+  <script type="module" src="js/ui.js?v=2"></script>
+</body>
+</html>
