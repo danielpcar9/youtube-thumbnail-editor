@@ -259,8 +259,15 @@ export class InteractionController {
     } 
     
     else if (this.activeAction === 'resize') {
-      this.resizeLayerRotated(layer, dx, dy);
-      this.editor.measureLayer(layer);
+      const didScaleFont = this.resizeLayerRotated(layer, dx, dy);
+      // Only re-measure from text metrics when the corner handles scaled the
+      // font size. Straight-edge handles (n/s/e/w) intentionally set an
+      // explicit box width/height for alignment purposes; re-measuring here
+      // would immediately overwrite that with the auto-fit text size,
+      // making those handles appear to do nothing.
+      if (didScaleFont) {
+        this.editor.measureLayer(layer);
+      }
       this.editor.render();
       this.updateSelectionBoxPosition();
       this.editor.onStateChange();
@@ -298,7 +305,9 @@ export class InteractionController {
     }
   }
 
-  // Projects delta mouse coordinates onto local axes of rotated layer to resize correctly
+  // Projects delta mouse coordinates onto local axes of rotated layer to resize correctly.
+  // Returns true if this was a corner-handle resize (which scales the font size and
+  // therefore needs a re-measure afterwards), false for straight-edge handles.
   resizeLayerRotated(layer, dx, dy) {
     const rad = (this.initialLayerState.rotation * Math.PI) / 180;
     const cos = Math.cos(rad);
@@ -310,41 +319,66 @@ export class InteractionController {
 
     const init = this.initialLayerState;
     const handle = this.resizeHandle;
+    const isCornerResize = ['nw', 'ne', 'sw', 'se'].includes(handle);
 
-    let newWidth = init.width;
-    let newHeight = init.height;
     let shiftX = 0;
     let shiftY = 0;
 
-    // Resize Horizontal
-    if (handle.includes('e')) {
-      newWidth = Math.max(10, init.width + localDx);
-    } else if (handle.includes('w')) {
-      const possibleWidth = init.width - localDx;
-      if (possibleWidth > 10) {
-        newWidth = possibleWidth;
-        shiftX = localDx;
-      }
-    }
+    if (isCornerResize) {
+      // Corner handles scale the font size uniformly, so width and height must
+      // grow/shrink together by the exact same factor. We derive that single
+      // factor from the diagonal distance between the dragged corner and the
+      // fixed opposite corner, so the anchor corner never drifts and the
+      // dragged corner tracks the cursor smoothly in any direction.
+      const anchorLocalX = handle.includes('w') ? init.width : 0;
+      const anchorLocalY = handle.includes('n') ? init.height : 0;
+      const handleLocalX = handle.includes('w') ? 0 : init.width;
+      const handleLocalY = handle.includes('n') ? 0 : init.height;
 
-    // Resize Vertical
-    if (handle.includes('s')) {
-      newHeight = Math.max(10, init.height + localDy);
-    } else if (handle.includes('n')) {
-      const possibleHeight = init.height - localDy;
-      if (possibleHeight > 10) {
-        newHeight = possibleHeight;
-        shiftY = localDy;
-      }
-    }
+      const initVecX = handleLocalX - anchorLocalX;
+      const initVecY = handleLocalY - anchorLocalY;
+      const initDist = Math.hypot(initVecX, initVecY) || 1;
 
-    // Set font size proportionally if dragging corners
-    if (['nw', 'ne', 'sw', 'se'].includes(handle)) {
-      // Calculate scale change of width
-      const scale = newWidth / init.width;
+      const newVecX = initVecX + localDx;
+      const newVecY = initVecY + localDy;
+      const newDist = Math.hypot(newVecX, newVecY);
+
+      const scale = Math.max(0.05, newDist / initDist);
+
+      const newWidth = Math.max(10, init.width * scale);
+      const newHeight = Math.max(10, init.height * scale);
+
       layer.fontSize = Math.max(8, Math.round(init.fontSize * scale));
+
+      if (handle.includes('w')) shiftX = init.width - newWidth;
+      if (handle.includes('n')) shiftY = init.height - newHeight;
     } else {
-      // For pure side resizing, change layer size limits
+      // Straight-edge handles (n/s/e/w) resize a single axis of the box
+      // directly, independent of font size — useful for manual alignment
+      // control (e.g. widening the box to re-center text within it).
+      let newWidth = init.width;
+      let newHeight = init.height;
+
+      if (handle.includes('e')) {
+        newWidth = Math.max(10, init.width + localDx);
+      } else if (handle.includes('w')) {
+        const possibleWidth = init.width - localDx;
+        if (possibleWidth > 10) {
+          newWidth = possibleWidth;
+          shiftX = localDx;
+        }
+      }
+
+      if (handle.includes('s')) {
+        newHeight = Math.max(10, init.height + localDy);
+      } else if (handle.includes('n')) {
+        const possibleHeight = init.height - localDy;
+        if (possibleHeight > 10) {
+          newHeight = possibleHeight;
+          shiftY = localDy;
+        }
+      }
+
       layer.width = newWidth;
       layer.height = newHeight;
     }
@@ -354,6 +388,8 @@ export class InteractionController {
       layer.x = init.x + (shiftX * cos - shiftY * sin);
       layer.y = init.y + (shiftX * sin + shiftY * cos);
     }
+
+    return isCornerResize;
   }
 
   // Simple point in rotated rect collision detection

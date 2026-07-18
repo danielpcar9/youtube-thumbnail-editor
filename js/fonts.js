@@ -36,9 +36,32 @@ export function loadFont(fontFamily) {
   }
 
   return new Promise((resolve) => {
-    // Check if the link already exists in the document
     const linkId = `gfont-${fontFamily.toLowerCase().replace(/\s+/g, '-')}`;
     let link = document.getElementById(linkId);
+    const linkAlreadyExisted = !!link;
+
+    const finish = () => {
+      loadedFonts.add(fontFamily);
+      resolve(fontFamily);
+    };
+
+    // Once the Google Fonts stylesheet is actually in the CSSOM (so its
+    // @font-face rules exist), force-load the specific weights this app
+    // draws with (400 normal + 900 bold, matching the ":wght@400;700;900"
+    // query below and the default fontWeight used by new text layers).
+    // Without this, canvas measureText/fillText can silently fall back to a
+    // system font for a brief period (or indefinitely on a slow network),
+    // producing a text box sized/aligned for the wrong font.
+    const forceLoadWeights = () => {
+      if (document.fonts && document.fonts.load) {
+        Promise.all([
+          document.fonts.load(`400 1em "${fontFamily}"`),
+          document.fonts.load(`900 1em "${fontFamily}"`)
+        ]).then(finish).catch(finish);
+      } else {
+        setTimeout(finish, 1000);
+      }
+    };
 
     if (!link) {
       link = document.createElement('link');
@@ -46,27 +69,13 @@ export function loadFont(fontFamily) {
       link.rel = 'stylesheet';
       const formattedName = fontFamily.replace(/\s+/g, '+');
       link.href = `https://fonts.googleapis.com/css2?family=${formattedName}:wght@400;700;900&display=swap`;
+      link.addEventListener('load', forceLoadWeights);
+      link.addEventListener('error', finish); // fail gracefully, don't hang forever
       document.head.appendChild(link);
-    }
-
-    // Wait until document.fonts has loaded the specific font
-    // or fallback to a timeout if API is not supported
-    if (document.fonts && document.fonts.load) {
-      document.fonts.load(`1em "${fontFamily}"`)
-        .then(() => {
-          loadedFonts.add(fontFamily);
-          resolve(fontFamily);
-        })
-        .catch(() => {
-          // Resolve anyway as fallback
-          loadedFonts.add(fontFamily);
-          resolve(fontFamily);
-        });
-    } else {
-      setTimeout(() => {
-        loadedFonts.add(fontFamily);
-        resolve(fontFamily);
-      }, 1000);
+    } else if (linkAlreadyExisted) {
+      // A <link> for this font already exists (e.g. requested twice in
+      // quick succession) but hasn't been recorded as loaded yet.
+      forceLoadWeights();
     }
   });
 }

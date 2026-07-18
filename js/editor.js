@@ -221,15 +221,18 @@ export class ThumbnailEditor {
     this.render();
   }
 
+  // Returns a Promise so callers can know when the change (and any async font
+  // loading it triggers) has actually finished being applied, before e.g.
+  // saving a history snapshot or syncing the selection box overlay.
   updateLayerProperty(id, property, value) {
     const layer = this.layers.find(l => l.id === id);
-    if (!layer) return;
+    if (!layer) return Promise.resolve();
 
     layer[property] = value;
 
     if (['text', 'fontSize', 'fontFamily', 'fontWeight', 'fontStyle', 'letterSpacing', 'lineHeight', 'strokeWidth', 'backgroundPadding'].includes(property)) {
       if (property === 'fontFamily') {
-        loadFont(value).then(() => {
+        return loadFont(value).then(() => {
           this.measureLayer(layer);
           this.render();
           this.onStateChange();
@@ -237,9 +240,11 @@ export class ThumbnailEditor {
       } else {
         this.measureLayer(layer);
         this.render();
+        return Promise.resolve();
       }
     } else {
       this.render();
+      return Promise.resolve();
     }
   }
 

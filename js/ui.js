@@ -555,11 +555,28 @@ document.addEventListener('DOMContentLoaded', () => {
   // -------------------------------------------------------------
   
   function updateActiveProperty(prop, val, saveHist = true) {
-    if (editor.selectedLayerId) {
-      editor.updateLayerProperty(editor.selectedLayerId, prop, val);
-      if (saveHist) {
+    if (!editor.selectedLayerId) return;
+
+    const result = editor.updateLayerProperty(editor.selectedLayerId, prop, val);
+
+    // Keep the selection box / handles overlay perfectly in sync while the
+    // user is actively dragging a slider or typing a value, instead of only
+    // snapping into place once the control loses focus.
+    interaction.updateSelectionBoxPosition();
+    if (interaction.isEditingText()) {
+      const layer = editor.getSelectedLayer();
+      if (layer) interaction.updateInPlaceEditorStyle(layer);
+    }
+
+    if (saveHist) {
+      // Some property changes (fontFamily) load a font asynchronously and
+      // only resize the layer once loaded. Wait for that to finish before
+      // snapshotting history, otherwise undo/redo can restore a state whose
+      // width/height don't match its fontFamily.
+      result.then(() => {
         editor.saveHistory();
-      }
+        interaction.updateSelectionBoxPosition();
+      });
     }
   }
 
