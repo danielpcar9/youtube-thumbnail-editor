@@ -35,6 +35,7 @@ export class ThumbnailEditor {
     this.panX = 0;
     this.panY = 0;
     this.selectedLayerId = null;
+    this.layerOperationToken = 0;
 
     // Snapping configuration
     this.snapSettings = {
@@ -61,12 +62,18 @@ export class ThumbnailEditor {
     return this.layers.find(l => l.id === this.selectedLayerId);
   }
 
+  selectLayer(id) {
+    this.selectedLayerId = id && this.layers.some(layer => layer.id === id) ? id : null;
+    this.onStateChange();
+    this.render();
+  }
+
   // Get deep copy of current state for history
   getCurrentState() {
     return {
-      layers: this.layers,
+      layers: this.layers.map(layer => ({ ...layer })),
       backgroundImageSrc: this.backgroundImageSrc,
-      backgroundImageSettings: this.backgroundImageSettings,
+      backgroundImageSettings: { ...this.backgroundImageSettings },
       selectedLayerId: this.selectedLayerId
     };
   }
@@ -75,9 +82,14 @@ export class ThumbnailEditor {
   restoreState(state) {
     if (!state) return;
     
-    this.selectedLayerId = state.selectedLayerId;
-    this.backgroundImageSettings = { ...state.backgroundImageSettings };
-    this.layers = state.layers.map(l => ({ ...l }));
+    this.layers = Array.isArray(state.layers) ? state.layers.map(l => ({ ...l })) : [];
+    this.selectedLayerId = this.layers.some(layer => layer.id === state.selectedLayerId)
+      ? state.selectedLayerId
+      : null;
+    this.backgroundImageSettings = {
+      ...this.backgroundImageSettings,
+      ...(state.backgroundImageSettings || {})
+    };
 
     if (state.backgroundImageSrc !== this.backgroundImageSrc) {
       this.backgroundImageSrc = state.backgroundImageSrc;
@@ -177,18 +189,25 @@ export class ThumbnailEditor {
       isLocked: false
     };
 
-    // Make sure font is loaded before adding and rendering
+    // Add synchronously so the layer exists immediately. Font loading may
+    // improve its measurement later, but can never decide whether it exists.
+    this.layers.push(newLayer);
+    this.selectedLayerId = newLayer.id;
+    this.measureLayer(newLayer);
+    newLayer.x = (this.logicalWidth - newLayer.width) / 2;
+    newLayer.y = (this.logicalHeight - newLayer.height) / 2;
+    this.saveHistory();
+    this.render();
+
+    const token = ++this.layerOperationToken;
     loadFont(newLayer.fontFamily).then(() => {
-      this.layers.push(newLayer);
-      this.selectedLayerId = newLayer.id;
-      this.measureLayer(newLayer);
-      // Place center of new layer at canvas center
-      newLayer.x = (this.logicalWidth - newLayer.width) / 2;
-      newLayer.y = (this.logicalHeight - newLayer.height) / 2;
-      
-      this.saveHistory();
+      const currentLayer = this.layers.find(layer => layer.id === newLayer.id);
+      if (!currentLayer || token !== this.layerOperationToken) return;
+      this.measureLayer(currentLayer);
       this.render();
+      this.onStateChange();
     });
+    return newLayer.id;
   }
 
   deleteLayer(id) {
@@ -198,6 +217,7 @@ export class ThumbnailEditor {
       if (this.selectedLayerId === id) {
         this.selectedLayerId = this.layers.length > 0 ? this.layers[this.layers.length - 1].id : null;
       }
+      this.layerOperationToken++;
       this.saveHistory();
       this.render();
     }
@@ -221,30 +241,28 @@ export class ThumbnailEditor {
     this.render();
   }
 
-  // Returns a Promise so callers can know when the change (and any async font
-  // loading it triggers) has actually finished being applied, before e.g.
-  // saving a history snapshot or syncing the selection box overlay.
   updateLayerProperty(id, property, value) {
     const layer = this.layers.find(l => l.id === id);
-    if (!layer) return Promise.resolve();
+    if (!layer) return;
 
     layer[property] = value;
 
     if (['text', 'fontSize', 'fontFamily', 'fontWeight', 'fontStyle', 'letterSpacing', 'lineHeight', 'strokeWidth', 'backgroundPadding'].includes(property)) {
       if (property === 'fontFamily') {
-        return loadFont(value).then(() => {
-          this.measureLayer(layer);
+        const requestedFont = value;
+        loadFont(value).then(() => {
+          const currentLayer = this.layers.find(candidate => candidate.id === id);
+          if (!currentLayer || currentLayer.fontFamily !== requestedFont) return;
+          this.measureLayer(currentLayer);
           this.render();
           this.onStateChange();
         });
       } else {
         this.measureLayer(layer);
         this.render();
-        return Promise.resolve();
       }
     } else {
       this.render();
-      return Promise.resolve();
     }
   }
 
