@@ -547,8 +547,25 @@ export class InteractionController {
     this.isCommittingOrCancelling = false;
   }
 
+  hasOpenInPlaceEditor() {
+    return !this.inPlaceEditor.classList.contains('hidden');
+  }
+
+  // Close only the DOM editor. The model transaction has already been
+  // completed by ThumbnailEditor when this is called from syncUI().
+  closeInPlaceEditor() {
+    if (!this.hasOpenInPlaceEditor()) return;
+
+    this.inPlaceEditor.classList.add('hidden');
+    if (document.activeElement === this.inPlaceEditor) {
+      this.inPlaceEditor.blur();
+    }
+    this.overlay.focus({ preventScroll: true });
+    this.updateSelectionBoxPosition();
+  }
+
   isEditingText() {
-    return this.editor.editingState === 'editing';
+    return this.editor.editingState === 'editing' || this.hasOpenInPlaceEditor();
   }
 
   initKeyboardShortcuts() {

@@ -339,6 +339,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Synchronize entire UI controls with state
   function syncUI() {
+    // The editor model can finish a transaction through a direct API call
+    // (for example selectLayer/deleteLayer), without going through the DOM
+    // blur handler. Never leave a visible textarea orphaned in that case.
+    if (editor.editingState !== 'editing' && interaction.hasOpenInPlaceEditor()) {
+      interaction.closeInPlaceEditor();
+    }
     if (editor.editingState === 'editing') {
       return;
     }

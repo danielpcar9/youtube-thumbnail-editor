@@ -150,6 +150,7 @@ export async function runAllTests(editor, interaction, syncUI) {
     logTest("Confirmación automática al cambiar selección", firstLayer && firstLayer.text === "Cambio durante edición");
     logTest("Selección actualizada correctamente", editor.selectedLayerId === anotherTextId);
     logTest("Estado de edición cerrado tras cambio de selección", editor.editingState === 'idle');
+    logTest("Textarea huérfano cerrado al cambiar selección", !interaction.hasOpenInPlaceEditor());
 
     // -------------------------------------------------------------
     // PRUEBA 7: Capas bloqueadas (Inmutabilidad)
