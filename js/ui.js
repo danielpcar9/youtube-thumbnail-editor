@@ -134,40 +134,46 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Preload common fonts, then load demo background and initial professional text layer
   preloadCommonFonts().then(() => {
-    // Load demo background image
-    editor.setBackgroundImage('demo_background.png');
-    
-    // Set a small delay for image loading, then add a styled default text layer
-    setTimeout(() => {
-      editor.addTextLayer('DISEÑO PRO');
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      editor.backgroundImage = img;
+      editor.backgroundImageSrc = 'demo_background.png';
       
-      setTimeout(() => {
-        const activeLayer = editor.getSelectedLayer();
-        if (activeLayer) {
-          editor.updateLayerProperty(activeLayer.id, 'fontFamily', 'Anton');
-          editor.updateLayerProperty(activeLayer.id, 'fontSize', 130);
-          editor.updateLayerProperty(activeLayer.id, 'fillColor', '#ffde00'); // bright thumbnail yellow
-          editor.updateLayerProperty(activeLayer.id, 'strokeColor', '#000000');
-          editor.updateLayerProperty(activeLayer.id, 'strokeWidth', 15);
-          editor.updateLayerProperty(activeLayer.id, 'rotation', -6); // classic YouTube tilt
-          
-          // Position vertically in lower middle
-          editor.updateLayerProperty(activeLayer.id, 'y', 380);
-          
-          // Enhanced Shadow
-          editor.updateLayerProperty(activeLayer.id, 'shadowColor', 'rgba(0,0,0,0.9)');
-          editor.updateLayerProperty(activeLayer.id, 'shadowBlur', 20);
-          editor.updateLayerProperty(activeLayer.id, 'shadowOffsetX', 8);
-          editor.updateLayerProperty(activeLayer.id, 'shadowOffsetY', 8);
-          
-          editor.saveHistory();
-        }
-      }, 300);
-    }, 200);
-
-    editor.saveHistory(); // Save initial empty state
-    zoomToFit();
-  });
+      // Add the text layer silently without intermediate history saves
+      const layerId = editor.addTextLayer('DISEÑO PRO', false);
+      
+      // Set styling
+      editor.updateLayerProperty(layerId, 'fontFamily', 'Anton');
+      editor.updateLayerProperty(layerId, 'fontSize', 130);
+      editor.updateLayerProperty(layerId, 'fillColor', '#ffde00'); // bright thumbnail yellow
+      editor.updateLayerProperty(layerId, 'strokeColor', '#000000');
+      editor.updateLayerProperty(layerId, 'strokeWidth', 15);
+      editor.updateLayerProperty(layerId, 'rotation', -6); // classic YouTube tilt
+      editor.updateLayerProperty(layerId, 'y', 380);
+      editor.updateLayerProperty(layerId, 'shadowColor', 'rgba(0,0,0,0.9)');
+      editor.updateLayerProperty(layerId, 'shadowBlur', 20);
+      editor.updateLayerProperty(layerId, 'shadowOffsetX', 8);
+      editor.updateLayerProperty(layerId, 'shadowOffsetY', 8);
+      
+      const activeLayer = editor.layers.find(l => l.id === layerId);
+      if (activeLayer) {
+        editor.measureLayer(activeLayer);
+      }
+      
+      // Save history and update UI once
+      editor.saveHistory();
+      zoomToFit();
+      syncUI();
+    };
+    img.onerror = () => {
+      // Fallback
+      editor.addTextLayer('DISEÑO PRO', true);
+      zoomToFit();
+      syncUI();
+    };
+    img.src = 'demo_background.png';
+  });;
 
   // Populate families in dropdown
   function populateFontSelector() {
@@ -333,6 +339,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Synchronize entire UI controls with state
   function syncUI() {
+    if (editor.editingState === 'editing') {
+      return;
+    }
     // 1. Undo/Redo Buttons state
     btnUndo.disabled = !editor.history.canUndo();
     btnRedo.disabled = !editor.history.canRedo();
@@ -905,5 +914,15 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
+  }
+
+  // Auto-run tests if query parameter ?test=1 is present
+  const urlParams = new URLSearchParams(window.location.search);
+  if (urlParams.get('test') === '1') {
+    import('./tests.js?v=2').then(module => {
+      setTimeout(() => {
+        module.runAllTests(editor, interaction, syncUI);
+      }, 1000);
+    });
   }
 });

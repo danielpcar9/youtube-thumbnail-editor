@@ -14,8 +14,6 @@ export class InteractionController {
     
     // Copy of active layer properties when interaction starts
     this.initialLayerState = null;
-    this.editingLayerId = null;
-    this.editingOriginalText = '';
     this.boundHandlers = {};
 
     // Selection box elements
@@ -73,7 +71,13 @@ export class InteractionController {
     this.selectionBox.addEventListener('dblclick', this.boundHandlers.doubleClick);
 
     // Textarea blur / edit finished listeners
-    this.boundHandlers.editorBlur = () => this.commitInPlaceEdit();
+    this.boundHandlers.editorBlur = () => {
+      // Ensure we only commit if currently editing
+      if (this.editor.editingState === 'editing') {
+        this.commitInPlaceEdit();
+      }
+    };
+    
     this.boundHandlers.editorKeyDown = (e) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -83,14 +87,15 @@ export class InteractionController {
         this.commitInPlaceEdit();
       }
     };
+    
     this.inPlaceEditor.addEventListener('blur', this.boundHandlers.editorBlur);
     this.inPlaceEditor.addEventListener('keydown', this.boundHandlers.editorKeyDown);
 
-    // Real-time update text while typing
+    // Real-time update text while typing (does not save history)
     this.boundHandlers.editorInput = () => {
       const activeLayer = this.getEditingLayer();
       if (activeLayer) {
-        this.editor.updateLayerProperty(activeLayer.id, 'text', this.inPlaceEditor.value);
+        this.editor.updateText(activeLayer.id, this.inPlaceEditor.value);
         this.updateSelectionBoxPosition();
         this.updateInPlaceEditorStyle(activeLayer);
       }
@@ -99,13 +104,12 @@ export class InteractionController {
   }
 
   getSelectedLayer() {
-    if (!this.editor.selectedLayerId) return null;
-    return this.editor.layers.find(l => l.id === this.editor.selectedLayerId);
+    return this.editor.getSelectedLayer();
   }
 
   getEditingLayer() {
-    if (!this.editingLayerId) return null;
-    return this.editor.layers.find(layer => layer.id === this.editingLayerId) || null;
+    if (!this.editor.editingLayerId) return null;
+    return this.editor.layers.find(layer => layer.id === this.editor.editingLayerId) || null;
   }
 
   // Update selection box size & position to match active layer
@@ -141,7 +145,6 @@ export class InteractionController {
     const xScreen = e.clientX - rect.left;
     const yScreen = e.clientY - rect.top;
     
-    // Scale screen coordinate deltas back to logical dimensions
     return {
       x: xScreen / this.editor.zoom,
       y: yScreen / this.editor.zoom
@@ -149,7 +152,6 @@ export class InteractionController {
   }
 
   handleMouseDown(e) {
-    // If double clicking/editing text, don't trigger drags
     if (this.isEditingText()) return;
 
     const layer = this.getSelectedLayer();
@@ -204,7 +206,6 @@ export class InteractionController {
     }
 
     // Clicked canvas background (Deselect or click through)
-    // Find if clicked another layer (hit test)
     const mouse = this.getLogicalMouseCoords(e);
     const clickedLayer = this.hitTestLayers(mouse.x, mouse.y);
 
@@ -237,7 +238,7 @@ export class InteractionController {
       const dy = e.clientY - this.startY;
       this.editor.panX = this.startPanX + dx;
       this.editor.panY = this.startPanY + dy;
-      this.editor.onStateChange(); // triggers CSS pan repositioning
+      this.editor.onStateChange();
       return;
     }
 
@@ -261,40 +262,33 @@ export class InteractionController {
         this.editor.snapSettings
       );
 
-      layer.x = snapResult.x;
-      layer.y = snapResult.y;
-
+      this.editor.moveLayer(layer.id, snapResult.x, snapResult.y);
       this.editor.activeGuides = snapResult.guides;
       this.drawSmartGuides(snapResult.guides);
       
-      this.editor.render();
       this.updateSelectionBoxPosition();
       this.editor.onStateChange();
     } 
     
     else if (this.activeAction === 'resize') {
-      this.resizeLayerRotated(layer, dx, dy);
-      this.editor.measureLayer(layer);
-      this.editor.render();
+      this.resizeLayerRotated(layer, mouse.x, mouse.y);
       this.updateSelectionBoxPosition();
       this.editor.onStateChange();
     } 
     
     else if (this.activeAction === 'rotate') {
-      // Calculate rotation angle
       const cx = this.initialLayerState.x + this.initialLayerState.width / 2;
       const cy = this.initialLayerState.y + this.initialLayerState.height / 2;
       
       const rad = Math.atan2(mouse.y - cy, mouse.x - cx);
-      let deg = (rad * 180) / Math.PI + 90; // Add 90 because handle is on top
+      let deg = (rad * 180) / Math.PI + 90;
 
-      // Hold Shift to snap to 15 degrees
       if (e.shiftKey) {
         deg = Math.round(deg / 15) * 15;
       }
 
-      layer.rotation = Math.round((deg + 360) % 360);
-      this.editor.render();
+      const rotation = Math.round((deg + 360) % 360);
+      this.editor.rotateLayer(layer.id, rotation);
       this.updateSelectionBoxPosition();
       this.editor.onStateChange();
     }
@@ -309,87 +303,146 @@ export class InteractionController {
       this.resizeHandle = null;
       this.editor.activeGuides = [];
       this.guidesContainer.innerHTML = '';
+      this.editor.assertEditorInvariants();
     }
   }
 
-  // Projects delta mouse coordinates onto local axes of rotated layer to resize correctly
-  resizeLayerRotated(layer, dx, dy) {
-    const rad = (this.initialLayerState.rotation * Math.PI) / 180;
+  // Geometrically perfect rotated resizing keeping the opposite side fixed
+  resizeLayerRotated(layer, mouseX, mouseY) {
+    const init = this.initialLayerState;
+    const handle = this.resizeHandle;
+    const rad = (init.rotation * Math.PI) / 180;
     const cos = Math.cos(rad);
     const sin = Math.sin(rad);
 
-    // Project screen-space delta mouse movement to rotated layer local coordinates
-    const localDx = dx * cos + dy * sin;
-    const localDy = -dx * sin + dy * cos;
+    // Original Center
+    const cx = init.x + init.width / 2;
+    const cy = init.y + init.height / 2;
 
-    const init = this.initialLayerState;
-    const handle = this.resizeHandle;
+    // Define fixed point in local space relative to original center
+    let uFixed = 0;
+    let vFixed = 0;
+    let uDragged = 0;
+    let vDragged = 0;
+
+    switch (handle) {
+      case 'se':
+        uFixed = -init.width / 2; vFixed = -init.height / 2;
+        uDragged = init.width / 2; vDragged = init.height / 2;
+        break;
+      case 'nw':
+        uFixed = init.width / 2; vFixed = init.height / 2;
+        uDragged = -init.width / 2; vDragged = -init.height / 2;
+        break;
+      case 'ne':
+        uFixed = -init.width / 2; vFixed = init.height / 2;
+        uDragged = init.width / 2; vDragged = -init.height / 2;
+        break;
+      case 'sw':
+        uFixed = init.width / 2; vFixed = -init.height / 2;
+        uDragged = -init.width / 2; vDragged = init.height / 2;
+        break;
+      case 'e':
+        uFixed = -init.width / 2; vFixed = 0;
+        uDragged = init.width / 2; vDragged = 0;
+        break;
+      case 'w':
+        uFixed = init.width / 2; vFixed = 0;
+        uDragged = -init.width / 2; vDragged = 0;
+        break;
+      case 's':
+        uFixed = 0; vFixed = -init.height / 2;
+        uDragged = 0; vDragged = init.height / 2;
+        break;
+      case 'n':
+        uFixed = 0; vFixed = init.height / 2;
+        uDragged = 0; vDragged = -init.height / 2;
+        break;
+    }
+
+    // Convert local fixed point to global space coordinates
+    const xFixed = cx + (uFixed * cos - vFixed * sin);
+    const yFixed = cy + (uFixed * sin + vFixed * cos);
 
     let newWidth = init.width;
     let newHeight = init.height;
-    let shiftX = 0;
-    let shiftY = 0;
+    let newFontSize = init.fontSize;
 
-    // Resize Horizontal
-    if (handle.includes('e')) {
-      newWidth = Math.max(10, init.width + localDx);
-    } else if (handle.includes('w')) {
-      const possibleWidth = init.width - localDx;
-      if (possibleWidth > 10) {
-        newWidth = possibleWidth;
-        shiftX = localDx;
-      }
-    }
-
-    // Resize Vertical
-    if (handle.includes('s')) {
-      newHeight = Math.max(10, init.height + localDy);
-    } else if (handle.includes('n')) {
-      const possibleHeight = init.height - localDy;
-      if (possibleHeight > 10) {
-        newHeight = possibleHeight;
-        shiftY = localDy;
-      }
-    }
-
-    // Set font size proportionally if dragging corners
     if (['nw', 'ne', 'sw', 'se'].includes(handle)) {
-      // Calculate scale change of width
-      const scale = newWidth / init.width;
-      layer.fontSize = Math.max(8, Math.round(init.fontSize * scale));
+      // Corner drag: aspect ratio and font size scaling
+      const originalDiagonal = Math.sqrt(init.width * init.width + init.height * init.height);
+      const currentDiagonal = Math.sqrt((mouseX - xFixed) * (mouseX - xFixed) + (mouseY - yFixed) * (mouseY - yFixed));
+      
+      // Prevent flipping by checking dot product of original vs new diagonal vectors
+      const origDiagVecX = uDragged - uFixed;
+      const origDiagVecY = vDragged - vFixed;
+      const origDiagGlobalX = origDiagVecX * cos - origDiagVecY * sin;
+      const origDiagGlobalY = origDiagVecX * sin + origDiagVecY * cos;
+      
+      const newDiagGlobalX = mouseX - xFixed;
+      const newDiagGlobalY = mouseY - yFixed;
+      
+      const dot = origDiagGlobalX * newDiagGlobalX + origDiagGlobalY * newDiagGlobalY;
+      
+      if (dot > 0) {
+        const scale = Math.max(0.1, currentDiagonal / originalDiagonal);
+        newWidth = Math.max(20, init.width * scale);
+        newHeight = Math.max(20, init.height * scale);
+        newFontSize = Math.max(8, Math.round(init.fontSize * scale));
+      } else {
+        newWidth = 20;
+        newHeight = 20;
+        newFontSize = 8;
+      }
     } else {
-      // For pure side resizing, change layer size limits
-      layer.width = newWidth;
-      layer.height = newHeight;
+      // Side resize: projects mouse distance relative to fixed point onto local axis
+      const dxGlobal = mouseX - xFixed;
+      const dyGlobal = mouseY - yFixed;
+
+      const localDx = dxGlobal * cos + dyGlobal * sin;
+      const localDy = -dxGlobal * sin + dyGlobal * cos;
+
+      if (handle === 'e' || handle === 'w') {
+        const sign = handle === 'e' ? 1 : -1;
+        newWidth = Math.max(20, localDx * sign);
+      } else if (handle === 's' || handle === 'n') {
+        const sign = handle === 's' ? 1 : -1;
+        newHeight = Math.max(20, localDy * sign);
+      }
     }
 
-    // Apply shifts back to global coordinates based on rotation
-    if (shiftX !== 0 || shiftY !== 0) {
-      layer.x = init.x + (shiftX * cos - shiftY * sin);
-      layer.y = init.y + (shiftX * sin + shiftY * cos);
-    }
+    // Determine scale offsets to compute new center from fixed point
+    const scaleX = newWidth / init.width;
+    const scaleY = newHeight / init.height;
+    const uFixedNew = uFixed * scaleX;
+    const vFixedNew = vFixed * scaleY;
+
+    const cxNew = xFixed - (uFixedNew * cos - vFixedNew * sin);
+    const cyNew = yFixed - (uFixedNew * sin + vFixedNew * cos);
+
+    const newX = cxNew - newWidth / 2;
+    const newY = cyNew - newHeight / 2;
+
+    // Apply values via the Editor APIs
+    this.editor.moveLayer(layer.id, newX, newY);
+    this.editor.resizeLayer(layer.id, newWidth, newHeight, newFontSize);
   }
 
-  // Simple point in rotated rect collision detection
   hitTestLayers(x, y) {
-    // Traverse layers backwards (top-most layers first)
     for (let i = this.editor.layers.length - 1; i >= 0; i--) {
       const layer = this.editor.layers[i];
       if (!layer.isVisible) continue;
 
-      // Translate test point relative to layer center
       const cx = layer.x + layer.width / 2;
       const cy = layer.y + layer.height / 2;
       
       const px = x - cx;
       const py = y - cy;
 
-      // Rotate point back by layer rotation angle
       const rad = (-layer.rotation * Math.PI) / 180;
       const rx = px * Math.cos(rad) - py * Math.sin(rad);
       const ry = px * Math.sin(rad) + py * Math.cos(rad);
 
-      // Check boundaries of unrotated local box
       const halfW = layer.width / 2;
       const halfH = layer.height / 2;
       const padding = layer.backgroundEnabled ? layer.backgroundPadding : 0;
@@ -402,7 +455,6 @@ export class InteractionController {
     return null;
   }
 
-  // Smart Guides drawing
   drawSmartGuides(guides) {
     this.guidesContainer.innerHTML = '';
     
@@ -424,15 +476,15 @@ export class InteractionController {
     });
   }
 
-  // Direct editing setup
   startInPlaceEdit() {
     const layer = this.getSelectedLayer();
     if (!layer || layer.isLocked) return;
 
+    const editStarted = this.editor.startEditing(layer.id);
+    if (!editStarted) return;
+
     this.selectionBox.classList.add('hidden');
     this.inPlaceEditor.classList.remove('hidden');
-    this.editingLayerId = layer.id;
-    this.editingOriginalText = layer.text;
     
     this.inPlaceEditor.value = layer.text;
     this.updateInPlaceEditorStyle(layer);
@@ -459,116 +511,140 @@ export class InteractionController {
   }
 
   commitInPlaceEdit(cancel = false) {
-    if (!this.isEditingText()) return;
+    if (this.editor.editingState !== 'editing') return;
+    if (this.isCommittingOrCancelling) return;
+    this.isCommittingOrCancelling = true;
 
-    const layer = this.getEditingLayer();
-    const newText = cancel ? this.editingOriginalText : this.inPlaceEditor.value;
-    const oldText = layer ? layer.text : this.editingOriginalText;
-
+    const textareaText = this.inPlaceEditor.value;
     this.inPlaceEditor.classList.add('hidden');
-    this.editingLayerId = null;
-    this.editingOriginalText = '';
+    
+    // Explicitly blur and shift focus back to overlay
     if (document.activeElement === this.inPlaceEditor) {
       this.inPlaceEditor.blur();
     }
-    this.overlay.focus({ preventScroll: true });
     
-    if (layer && oldText !== newText) {
-      this.editor.updateLayerProperty(layer.id, 'text', newText);
-      this.editor.saveHistory();
+    const layer = this.getEditingLayer();
+    if (layer) {
+      if (cancel) {
+        this.editor.cancelEditing();
+      } else {
+        // Apply final text update
+        this.editor.updateText(layer.id, textareaText);
+        this.editor.commitEditing();
+      }
+    } else {
+      // Fallback state machine reset if layer disappeared during transaction
+      this.editor.editingState = 'idle';
+      this.editor.editingLayerId = null;
+      this.editor.editingOriginalText = '';
+      this.editor.onStateChange();
     }
 
+    this.overlay.focus({ preventScroll: true });
     this.updateSelectionBoxPosition();
     this.editor.render();
-    this.editor.onStateChange();
+
+    this.isCommittingOrCancelling = false;
   }
 
   isEditingText() {
-    return !this.inPlaceEditor.classList.contains('hidden');
+    return this.editor.editingState === 'editing';
   }
 
-  // Keyboard Shortcuts Bindings
   initKeyboardShortcuts() {
     this.boundHandlers.keyDown = (e) => {
-      // Skip shortcuts if writing in text area or input fields
+      // Skip shortcuts if writing in input fields, select, contenteditable or textarea
       const activeEl = document.activeElement;
-      const isInput = activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable;
+      const isInput = activeEl.tagName === 'INPUT' || 
+                      activeEl.tagName === 'SELECT' || 
+                      activeEl.tagName === 'TEXTAREA' || 
+                      activeEl.isContentEditable;
       if (isInput) return;
 
       const layer = this.getSelectedLayer();
+      const keyLower = e.key.toLowerCase();
 
       // Undo: Ctrl/Cmd + Z
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && keyLower === 'z') {
         e.preventDefault();
         this.editor.undo();
         this.updateSelectionBoxPosition();
+        return;
       }
       
       // Redo: Ctrl/Cmd + Shift + Z or Ctrl/Cmd + Y
-      if (((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'z') || ((e.ctrlKey || e.metaKey) && e.key === 'y')) {
+      if (((e.ctrlKey || e.metaKey) && e.shiftKey && keyLower === 'z') || ((e.ctrlKey || e.metaKey) && keyLower === 'y')) {
         e.preventDefault();
         this.editor.redo();
         this.updateSelectionBoxPosition();
+        return;
       }
 
       // Lock selected layer: Ctrl/Cmd + L
-      if ((e.ctrlKey || e.metaKey) && e.key === 'l') {
+      if ((e.ctrlKey || e.metaKey) && keyLower === 'l') {
         if (layer) {
           e.preventDefault();
           this.editor.updateLayerProperty(layer.id, 'isLocked', !layer.isLocked);
           this.editor.saveHistory();
           this.updateSelectionBoxPosition();
         }
+        return;
       }
 
       // Toggle visibility: Ctrl/Cmd + H
-      if ((e.ctrlKey || e.metaKey) && e.key === 'h') {
+      if ((e.ctrlKey || e.metaKey) && keyLower === 'h') {
         if (layer) {
           e.preventDefault();
           this.editor.updateLayerProperty(layer.id, 'isVisible', !layer.isVisible);
           this.editor.saveHistory();
           this.updateSelectionBoxPosition();
         }
+        return;
       }
 
-      // Delete: Delete or Backspace
+      // Delete: Delete or Backspace (only if workspace has focus/activeEl matches overlay/body)
       if (e.key === 'Delete' || e.key === 'Backspace') {
-        if (layer && !layer.isLocked) {
+        const canDelete = activeEl === this.overlay || activeEl === document.body;
+        if (layer && !layer.isLocked && canDelete) {
           e.preventDefault();
           this.editor.deleteLayer(layer.id);
           this.updateSelectionBoxPosition();
         }
+        return;
       }
 
       // Duplicate: Ctrl/Cmd + D
-      if ((e.ctrlKey || e.metaKey) && e.key === 'd') {
+      if ((e.ctrlKey || e.metaKey) && keyLower === 'd') {
         if (layer) {
           e.preventDefault();
           this.editor.duplicateLayer(layer.id);
           this.updateSelectionBoxPosition();
         }
+        return;
       }
 
       // Arrow Key Nudging
-      if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) {
+      if (['arrowleft', 'arrowright', 'arrowup', 'arrowdown'].includes(keyLower)) {
         if (layer && !layer.isLocked) {
           e.preventDefault();
-          const speed = e.shiftKey ? 10 : 1; // shift nudges by 10px
+          const speed = e.shiftKey ? 10 : 1;
+          let dx = 0;
+          let dy = 0;
           
-          if (e.key === 'ArrowLeft') layer.x -= speed;
-          if (e.key === 'ArrowRight') layer.x += speed;
-          if (e.key === 'ArrowUp') layer.y -= speed;
-          if (e.key === 'ArrowDown') layer.y += speed;
+          if (e.key === 'ArrowLeft') dx = -speed;
+          if (e.key === 'ArrowRight') dx = speed;
+          if (e.key === 'ArrowUp') dy = -speed;
+          if (e.key === 'ArrowDown') dy = speed;
 
-          this.editor.render();
+          this.editor.nudgeLayer(layer.id, dx, dy);
           this.updateSelectionBoxPosition();
           
-          // Debounce history saving on keyboard nudges
           clearTimeout(this.nudgeHistoryTimeout);
           this.nudgeHistoryTimeout = setTimeout(() => {
             this.editor.saveHistory();
           }, 300);
         }
+        return;
       }
     };
     window.addEventListener('keydown', this.boundHandlers.keyDown);
@@ -576,14 +652,12 @@ export class InteractionController {
     // Spacebar panning listener
     this.boundHandlers.spaceKeyDown = (e) => {
       const activeEl = document.activeElement;
-      const isInput = activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable;
+      const isInput = activeEl.tagName === 'INPUT' || activeEl.tagName === 'SELECT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable;
       if (isInput) return;
 
       if (e.key === ' ' && this.activeAction !== 'pan') {
-        // Spacebar pressed: turn cursor to grab
         this.activeAction = 'pan';
         this.overlay.style.cursor = 'grab';
-        // Cache start pan coordinates when workspace is hovered
         this.startX = this.lastMouseX || 0;
         this.startY = this.lastMouseY || 0;
         this.startPanX = this.editor.panX;
@@ -601,7 +675,6 @@ export class InteractionController {
     };
     window.addEventListener('keyup', this.boundHandlers.keyUp);
 
-    // Store mouse position for spacebar pan start
     this.boundHandlers.trackMouse = (e) => {
       this.lastMouseX = e.clientX;
       this.lastMouseY = e.clientY;
@@ -613,10 +686,16 @@ export class InteractionController {
     this.overlay.removeEventListener('mousedown', this.boundHandlers.mouseDown);
     window.removeEventListener('mousemove', this.boundHandlers.mouseMove);
     window.removeEventListener('mouseup', this.boundHandlers.mouseUp);
-    this.selectionBox.removeEventListener('dblclick', this.boundHandlers.doubleClick);
+    
+    // Check if selectionBox elements exist before removing
+    if (this.selectionBox) {
+      this.selectionBox.removeEventListener('dblclick', this.boundHandlers.doubleClick);
+    }
+    
     this.inPlaceEditor.removeEventListener('blur', this.boundHandlers.editorBlur);
     this.inPlaceEditor.removeEventListener('keydown', this.boundHandlers.editorKeyDown);
     this.inPlaceEditor.removeEventListener('input', this.boundHandlers.editorInput);
+    
     window.removeEventListener('keydown', this.boundHandlers.keyDown);
     window.removeEventListener('keydown', this.boundHandlers.spaceKeyDown);
     window.removeEventListener('keyup', this.boundHandlers.keyUp);

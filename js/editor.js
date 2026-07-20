@@ -35,7 +35,15 @@ export class ThumbnailEditor {
     this.panX = 0;
     this.panY = 0;
     this.selectedLayerId = null;
-    this.layerOperationToken = 0;
+
+    // Explicit Editing State Machine
+    this.editingState = 'idle'; // 'idle', 'editing', 'committing', 'cancelling'
+    this.editingLayerId = null;
+    this.editingOriginalText = '';
+
+    // Asynchronous Operation Token tracking (layerId -> token)
+    this.layerOperationTokens = new Map();
+    this.bgOperationToken = 0;
 
     // Snapping configuration
     this.snapSettings = {
@@ -46,8 +54,8 @@ export class ThumbnailEditor {
     };
     this.activeGuides = [];
 
-    // Helper overlay canvas reference (optional, we can draw overlays in ui/interaction)
-    this.onStateChange = () => {}; // Callback when state updates
+    // Callback when state updates
+    this.onStateChange = () => {};
 
     // History
     this.history = new HistoryManager();
@@ -59,12 +67,124 @@ export class ThumbnailEditor {
 
   getSelectedLayer() {
     if (!this.selectedLayerId) return null;
-    return this.layers.find(l => l.id === this.selectedLayerId);
+    return this.layers.find(l => l.id === this.selectedLayerId) || null;
   }
 
+  // Centralized selection API
   selectLayer(id) {
-    this.selectedLayerId = id && this.layers.some(layer => layer.id === id) ? id : null;
+    // If active editing, commit first
+    if (this.editingState === 'editing') {
+      this.commitEditing();
+    }
+    const targetId = id && this.layers.some(layer => layer.id === id) ? id : null;
+    this.selectedLayerId = targetId;
+    this.assertEditorInvariants();
     this.onStateChange();
+    this.render();
+  }
+
+  // Explicit Editing Transaction Actions
+  startEditing(id) {
+    if (this.editingState === 'editing') {
+      if (this.editingLayerId === id) return true;
+      this.commitEditing();
+    }
+    const layer = this.layers.find(l => l.id === id);
+    if (!layer || layer.isLocked) return false;
+
+    this.editingState = 'editing';
+    this.editingLayerId = id;
+    this.editingOriginalText = layer.text;
+    this.assertEditorInvariants();
+    this.onStateChange();
+    this.render();
+    return true;
+  }
+
+  commitEditing() {
+    if (this.editingState !== 'editing') return;
+    this.editingState = 'committing';
+
+    const layer = this.layers.find(l => l.id === this.editingLayerId);
+    if (layer) {
+      // Only save history if the user actually modified the text
+      if (layer.text !== this.editingOriginalText) {
+        this.saveHistory();
+      }
+    }
+
+    this.editingState = 'idle';
+    this.editingLayerId = null;
+    this.editingOriginalText = '';
+    this.assertEditorInvariants();
+    this.onStateChange();
+    this.render();
+  }
+
+  cancelEditing() {
+    if (this.editingState !== 'editing') return;
+    this.editingState = 'cancelling';
+
+    const layer = this.layers.find(l => l.id === this.editingLayerId);
+    if (layer) {
+      layer.text = this.editingOriginalText;
+      this.measureLayer(layer);
+    }
+
+    this.editingState = 'idle';
+    this.editingLayerId = null;
+    this.editingOriginalText = '';
+    this.assertEditorInvariants();
+    this.onStateChange();
+    this.render();
+  }
+
+  updateText(id, text) {
+    const layer = this.layers.find(l => l.id === id);
+    if (!layer || layer.isLocked) return;
+    layer.text = text;
+    this.measureLayer(layer);
+    this.assertEditorInvariants();
+    this.render();
+    this.onStateChange();
+  }
+
+  // Centralized Mutation APIs
+  moveLayer(id, x, y) {
+    const layer = this.layers.find(l => l.id === id);
+    if (!layer || layer.isLocked) return;
+    layer.x = x;
+    layer.y = y;
+    this.assertEditorInvariants();
+    this.render();
+  }
+
+  resizeLayer(id, width, height, fontSize) {
+    const layer = this.layers.find(l => l.id === id);
+    if (!layer || layer.isLocked) return;
+    layer.width = width;
+    layer.height = height;
+    if (fontSize !== undefined && fontSize !== null) {
+      layer.fontSize = fontSize;
+    }
+    this.assertEditorInvariants();
+    this.render();
+  }
+
+  rotateLayer(id, rotation) {
+    const layer = this.layers.find(l => l.id === id);
+    if (!layer || layer.isLocked) return;
+    layer.rotation = rotation;
+    this.assertEditorInvariants();
+    this.render();
+  }
+
+  nudgeLayer(id, dx, dy) {
+    const layer = this.layers.find(l => l.id === id);
+    if (!layer || layer.isLocked) return;
+    layer.x += dx;
+    layer.y += dy;
+    this.assertEditorInvariants();
     this.render();
   }
 
@@ -82,6 +202,11 @@ export class ThumbnailEditor {
   restoreState(state) {
     if (!state) return;
     
+    // If active editing, cancel it cleanly
+    if (this.editingState === 'editing') {
+      this.cancelEditing();
+    }
+
     this.layers = Array.isArray(state.layers) ? state.layers.map(l => ({ ...l })) : [];
     this.selectedLayerId = this.layers.some(layer => layer.id === state.selectedLayerId)
       ? state.selectedLayerId
@@ -93,19 +218,24 @@ export class ThumbnailEditor {
 
     if (state.backgroundImageSrc !== this.backgroundImageSrc) {
       this.backgroundImageSrc = state.backgroundImageSrc;
+      const currentBgToken = ++this.bgOperationToken;
       if (this.backgroundImageSrc) {
         const img = new Image();
         img.crossOrigin = 'anonymous';
         img.onload = () => {
+          if (currentBgToken !== this.bgOperationToken) return;
           this.backgroundImage = img;
           this.recalculateAllTextDimensions();
+          this.assertEditorInvariants();
           this.render();
           this.onStateChange();
         };
         img.onerror = () => {
+          if (currentBgToken !== this.bgOperationToken) return;
           this.backgroundImage = null;
           this.backgroundImageSrc = null;
           this.recalculateAllTextDimensions();
+          this.assertEditorInvariants();
           this.render();
           this.onStateChange();
         };
@@ -113,17 +243,21 @@ export class ThumbnailEditor {
       } else {
         this.backgroundImage = null;
         this.recalculateAllTextDimensions();
+        this.assertEditorInvariants();
         this.render();
         this.onStateChange();
       }
     } else {
       this.recalculateAllTextDimensions();
+      this.assertEditorInvariants();
       this.render();
       this.onStateChange();
     }
   }
 
   saveHistory() {
+    // Avoid saving history while in temporary transitorily broken state
+    if (this.editingState === 'editing' || this.editingState === 'cancelling') return;
     this.history.pushState(this.getCurrentState());
     this.onStateChange();
   }
@@ -143,81 +277,90 @@ export class ThumbnailEditor {
   }
 
   // Layer Management
-  addTextLayer(text = 'TEXTO') {
+  addTextLayer(text = 'TEXTO', save = true) {
     const newLayer = {
       id: 'text_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
       type: 'text',
       text: text,
       x: 300,
       y: 250,
-      width: 200, // calculated later
-      height: 100, // calculated later
-      rotation: 0, // degrees
+      width: 200,
+      height: 100,
+      rotation: 0,
       fontSize: 80,
       fontFamily: 'Montserrat',
-      fontWeight: '900', // bold
+      fontWeight: '900',
       fontStyle: 'normal',
       fillColor: '#ffffff',
-      alignment: 'center', // 'left', 'center', 'right'
-      letterSpacing: 2, // px
-      lineHeight: 1.2, // multiplier
+      alignment: 'center',
+      letterSpacing: 2,
+      lineHeight: 1.2,
       
-      // Border / Stroke
       strokeEnabled: true,
       strokeColor: '#000000',
       strokeWidth: 10,
 
-      // Shadow
       shadowEnabled: true,
       shadowColor: 'rgba(0, 0, 0, 0.7)',
       shadowBlur: 15,
       shadowOffsetX: 5,
       shadowOffsetY: 5,
 
-      // Glow
       glowEnabled: false,
       glowColor: '#ff007f',
       glowBlur: 20,
 
-      // Background Panel
       backgroundEnabled: false,
       backgroundColor: '#000000',
       backgroundOpacity: 0.6,
-      backgroundPadding: 15, // px
+      backgroundPadding: 15,
 
       isVisible: true,
       isLocked: false
     };
 
-    // Add synchronously so the layer exists immediately. Font loading may
-    // improve its measurement later, but can never decide whether it exists.
     this.layers.push(newLayer);
     this.selectedLayerId = newLayer.id;
     this.measureLayer(newLayer);
     newLayer.x = (this.logicalWidth - newLayer.width) / 2;
     newLayer.y = (this.logicalHeight - newLayer.height) / 2;
-    this.saveHistory();
+    
+    if (save) {
+      this.saveHistory();
+    }
     this.render();
 
-    const token = ++this.layerOperationToken;
+    // Async font loading with operation tokens per layer
+    const layerId = newLayer.id;
+    const currentToken = (this.layerOperationTokens.get(layerId) || 0) + 1;
+    this.layerOperationTokens.set(layerId, currentToken);
+
     loadFont(newLayer.fontFamily).then(() => {
-      const currentLayer = this.layers.find(layer => layer.id === newLayer.id);
-      if (!currentLayer || token !== this.layerOperationToken) return;
+      const currentLayer = this.layers.find(layer => layer.id === layerId);
+      if (!currentLayer) return;
+      if (this.layerOperationTokens.get(layerId) !== currentToken) return;
       this.measureLayer(currentLayer);
+      this.assertEditorInvariants();
       this.render();
       this.onStateChange();
     });
+
     return newLayer.id;
   }
 
   deleteLayer(id) {
+    if (this.editingState === 'editing' && this.editingLayerId === id) {
+      this.cancelEditing();
+    }
     const index = this.layers.findIndex(l => l.id === id);
     if (index !== -1) {
+      const layer = this.layers[index];
+      if (layer.isLocked) return;
       this.layers.splice(index, 1);
       if (this.selectedLayerId === id) {
         this.selectedLayerId = this.layers.length > 0 ? this.layers[this.layers.length - 1].id : null;
       }
-      this.layerOperationToken++;
+      this.layerOperationTokens.delete(id);
       this.saveHistory();
       this.render();
     }
@@ -230,7 +373,7 @@ export class ThumbnailEditor {
     const dup = {
       ...layer,
       id: 'text_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5),
-      x: layer.x + 30, // offset
+      x: layer.x + 30,
       y: layer.y + 30,
       isLocked: false
     };
@@ -250,18 +393,26 @@ export class ThumbnailEditor {
     if (['text', 'fontSize', 'fontFamily', 'fontWeight', 'fontStyle', 'letterSpacing', 'lineHeight', 'strokeWidth', 'backgroundPadding'].includes(property)) {
       if (property === 'fontFamily') {
         const requestedFont = value;
+        const currentToken = (this.layerOperationTokens.get(id) || 0) + 1;
+        this.layerOperationTokens.set(id, currentToken);
+
         loadFont(value).then(() => {
           const currentLayer = this.layers.find(candidate => candidate.id === id);
-          if (!currentLayer || currentLayer.fontFamily !== requestedFont) return;
+          if (!currentLayer) return;
+          if (this.layerOperationTokens.get(id) !== currentToken) return;
+          if (currentLayer.fontFamily !== requestedFont) return;
           this.measureLayer(currentLayer);
+          this.assertEditorInvariants();
           this.render();
           this.onStateChange();
         });
       } else {
         this.measureLayer(layer);
+        this.assertEditorInvariants();
         this.render();
       }
     } else {
+      this.assertEditorInvariants();
       this.render();
     }
   }
@@ -270,13 +421,16 @@ export class ThumbnailEditor {
   setBackgroundImage(src) {
     const img = new Image();
     img.crossOrigin = 'anonymous';
+    const currentBgToken = ++this.bgOperationToken;
     img.onload = () => {
+      if (currentBgToken !== this.bgOperationToken) return;
       this.backgroundImage = img;
       this.backgroundImageSrc = src;
       this.saveHistory();
       this.render();
     };
     img.onerror = () => {
+      if (currentBgToken !== this.bgOperationToken) return;
       alert('Error al cargar la imagen de fondo. Intente con otro archivo.');
     };
     img.src = src;
@@ -315,8 +469,7 @@ export class ThumbnailEditor {
 
     ctx.restore();
 
-    // Canvas letterSpacing fallback for older browsers:
-    // If not supported natively, add an estimation
+    // Canvas letterSpacing fallback for older browsers
     if (ctx.letterSpacing === undefined && layer.letterSpacing !== 0) {
       lines.forEach(line => {
         const extra = line.length * layer.letterSpacing;
@@ -325,6 +478,7 @@ export class ThumbnailEditor {
       });
     }
 
+    // Assign width and height
     layer.width = Math.max(20, Math.ceil(maxWidth));
     
     const count = lines.length;
@@ -364,14 +518,13 @@ export class ThumbnailEditor {
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.logicalWidth, this.logicalHeight);
 
-    // 1. Draw Checkered Background (to show transparency)
+    // 1. Draw Checkered Background
     this.drawCheckeredBackground(ctx, this.logicalWidth, this.logicalHeight);
 
     // 2. Draw Background Image (with filters)
     if (this.backgroundImage) {
       ctx.save();
       
-      // Apply image filters
       const s = this.backgroundImageSettings;
       const filters = [];
       if (s.blur > 0) filters.push(`blur(${s.blur}px)`);
@@ -385,7 +538,6 @@ export class ThumbnailEditor {
       
       ctx.globalAlpha = s.opacity / 100;
 
-      // Draw depending on scaleMode
       if (s.scaleMode === 'cover') {
         const imgRatio = this.backgroundImage.width / this.backgroundImage.height;
         const canvasRatio = this.logicalWidth / this.logicalHeight;
@@ -419,22 +571,17 @@ export class ThumbnailEditor {
           dy = 0;
           dx = (this.logicalWidth - dw) / 2;
         }
-        // Fill canvas with black for containment borders, then draw image
         ctx.fillStyle = '#000000';
         ctx.fillRect(0, 0, this.logicalWidth, this.logicalHeight);
         ctx.drawImage(this.backgroundImage, dx, dy, dw, dh);
       } else {
-        // custom
         ctx.drawImage(this.backgroundImage, s.x, s.y, s.width, s.height);
       }
 
       ctx.restore();
     }
 
-    // 3. Draw Grid Lines if grid is active and drawn directly (normally grid is drawn in UI overlay, but we can render it)
-    // We prefer drawing the grid on the UI overlay to not bake it into the export.
-
-    // 4. Draw Text Layers in order (index 0 is bottom, last index is top)
+    // 3. Draw Text Layers in order
     this.layers.forEach(layer => {
       if (!layer.isVisible) return;
       this.drawTextLayer(ctx, layer);
@@ -459,8 +606,6 @@ export class ThumbnailEditor {
   drawTextLayer(ctx, layer) {
     ctx.save();
 
-    // Move to the position of the layer (layer.x, layer.y represents top-left)
-    // For rotation, we rotate around the center of the bounding box
     const cx = layer.x + layer.width / 2;
     const cy = layer.y + layer.height / 2;
 
@@ -468,11 +613,8 @@ export class ThumbnailEditor {
     if (layer.rotation !== 0) {
       ctx.rotate((layer.rotation * Math.PI) / 180);
     }
-    // Go back to the top-left of the bounding box relative to rotation center (cx, cy)
     ctx.translate(-layer.width / 2, -layer.height / 2);
 
-    // Apply Glow/Shadow filters at context level before drawing shapes
-    // Note: Canvas shadow can be used. Glow is simulated with a shadow without offsets.
     if (layer.glowEnabled) {
       ctx.shadowColor = layer.glowColor;
       ctx.shadowBlur = layer.glowBlur;
@@ -493,29 +635,23 @@ export class ThumbnailEditor {
     const lines = layer.text.split('\n');
     const padding = layer.backgroundPadding;
 
-    // 1. Draw Background Panel (if enabled)
     if (layer.backgroundEnabled) {
       ctx.save();
-      // Temporarily disable shadow on background panel unless we want it, normally we don't or keep it clean
-      // Actually, if drop shadow is enabled, let it apply to the background box too, it looks nice!
       ctx.fillStyle = layer.backgroundColor;
       ctx.globalAlpha = layer.backgroundOpacity;
       
-      // Draw rounded rectangle or flat rectangle
       const rectX = -padding;
       const rectY = -padding;
       const rectW = layer.width + padding * 2;
       const rectH = layer.height + padding * 2;
       
       ctx.beginPath();
-      // Round corner radius = 8px
       const radius = 8;
       ctx.roundRect(rectX, rectY, rectW, rectH, radius);
       ctx.fill();
       ctx.restore();
     }
 
-    // 2. Set Font Properties
     const weight = layer.fontWeight || 'normal';
     const style = layer.fontStyle || 'normal';
     ctx.font = `${style} ${weight} ${layer.fontSize}px "${layer.fontFamily}"`;
@@ -525,27 +661,23 @@ export class ThumbnailEditor {
       ctx.letterSpacing = `${layer.letterSpacing}px`;
     }
 
-    // Color Setup
     ctx.fillStyle = layer.fillColor;
     ctx.strokeStyle = layer.strokeColor;
     ctx.lineWidth = layer.strokeWidth;
     ctx.lineJoin = 'round';
     ctx.lineCap = 'round';
 
-    // 3. Draw Text Line by Line
     const spacingHeight = layer.fontSize * layer.lineHeight;
 
     lines.forEach((line, index) => {
       const lineY = index * spacingHeight;
       let lineX = 0;
 
-      // Alignment adjustments
       if (layer.alignment === 'center') {
         let textWidth = 0;
         if (ctx.letterSpacing !== undefined) {
           textWidth = ctx.measureText(line).width;
         } else {
-          // Fallback letterspacing width
           textWidth = ctx.measureText(line).width + (line.length * layer.letterSpacing);
         }
         lineX = (layer.width - textWidth) / 2;
@@ -559,7 +691,6 @@ export class ThumbnailEditor {
         lineX = layer.width - textWidth;
       }
 
-      // Draw custom letterspacing fallback if browser lacks support
       if (ctx.letterSpacing === undefined && layer.letterSpacing !== 0) {
         let currentX = lineX;
         for (let i = 0; i < line.length; i++) {
@@ -571,12 +702,9 @@ export class ThumbnailEditor {
           currentX += ctx.measureText(char).width + layer.letterSpacing;
         }
       } else {
-        // Native rendering
         if (layer.strokeEnabled && layer.strokeWidth > 0) {
-          // Draw stroke first
           ctx.strokeText(line, lineX, lineY);
         }
-        // Draw fill second
         ctx.fillText(line, lineX, lineY);
       }
     });
@@ -586,26 +714,18 @@ export class ThumbnailEditor {
 
   // Export Canvas
   exportImage(format = 'png', quality = 0.95) {
-    // Return high quality data URL
     const mimeType = format === 'jpeg' || format === 'jpg' ? 'image/jpeg' : 'image/png';
     
-    // In case there is transparency and user exports to JPG, draw a solid black background
     if (mimeType === 'image/jpeg') {
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = this.logicalWidth;
       tempCanvas.height = this.logicalHeight;
       const tempCtx = tempCanvas.getContext('2d');
       
-      // Draw solid black
       tempCtx.fillStyle = '#000000';
       tempCtx.fillRect(0, 0, this.logicalWidth, this.logicalHeight);
       
-      // Draw actual thumbnail content
-      // Redraw onto temporary canvas
-      // But we can just draw checkers replacement:
       if (this.backgroundImage) {
-        // Redraw background image
-        // Draw with filters and alpha
         tempCtx.save();
         const s = this.backgroundImageSettings;
         const filters = [];
@@ -665,7 +785,52 @@ export class ThumbnailEditor {
       return tempCanvas.toDataURL(mimeType, quality);
     }
 
-    // For PNG, just return dataURL from active canvas
     return this.canvas.toDataURL('image/png');
+  }
+
+  // Global Invariants Assert Method
+  assertEditorInvariants() {
+    // 1. Unique IDs
+    const ids = this.layers.map(l => l.id);
+    const uniqueIds = ids.length === new Set(ids).size;
+    if (!uniqueIds) throw new Error("Invariante violado: IDs de capa duplicados.");
+
+    // 2. Valid selection
+    if (this.selectedLayerId !== null) {
+      const selectedExists = this.layers.some(l => l.id === this.selectedLayerId);
+      if (!selectedExists) throw new Error("Invariante violado: selectedLayerId apunta a una capa inexistente.");
+    }
+
+    // 3. Valid editingLayerId
+    if (this.editingLayerId !== null) {
+      const editingExists = this.layers.some(l => l.id === this.editingLayerId);
+      if (!editingExists) throw new Error("Invariante violado: editingLayerId apunta a una capa inexistente.");
+    }
+
+    // 4. Consistent transitional editing state
+    if (this.editingState === 'editing') {
+      if (this.editingLayerId === null) {
+        throw new Error("Invariante violado: editingState es 'editing' pero editingLayerId es null.");
+      }
+    } else if (this.editingState === 'idle') {
+      if (this.editingLayerId !== null) {
+        throw new Error("Invariante violado: editingState es 'idle' pero editingLayerId no es null.");
+      }
+    }
+
+    // 5. Serializable snapshots
+    try {
+      JSON.stringify(this.getCurrentState());
+    } catch (e) {
+      throw new Error("Invariante violado: el estado actual no es serializable: " + e.message);
+    }
+
+    // 6. Exactly one textarea
+    const textareas = document.querySelectorAll('#in-place-editor');
+    if (textareas.length !== 1) {
+      throw new Error(`Invariante violado: se encontraron ${textareas.length} textareas de edición en lugar de exactamente 1.`);
+    }
+
+    return true;
   }
 }
