@@ -14,7 +14,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const workspaceViewport = document.getElementById('workspace-viewport');
   const interactionOverlay = document.getElementById('interaction-overlay');
   const inPlaceEditor = document.getElementById('in-place-editor');
-  
+
   // Toolbar Buttons
   const btnLoadBg = document.getElementById('btn-load-bg');
   const bgFileInput = document.getElementById('bg-file-input');
@@ -27,21 +27,25 @@ document.addEventListener('DOMContentLoaded', () => {
   const btnExportPng = document.getElementById('btn-export-png');
   const btnExportJpg = document.getElementById('btn-export-jpg');
   const btnDeleteLayer = document.getElementById('btn-delete-layer');
-  
+
   // Left Sidebar
   const layersListContainer = document.getElementById('layers-list');
-  
+
   // Right Properties Panel
   const propertiesControls = document.getElementById('properties-controls');
   const propertiesEmptyState = document.getElementById('properties-empty-state');
   const coordDisplay = document.getElementById('coord-display');
-  
+  const propText = document.getElementById('prop-text');
+  const propAddText = document.getElementById('prop-add-text');
+  const propClearText = document.getElementById('prop-clear-text');
+  const propDeleteText = document.getElementById('prop-delete-text');
+
   // 1. Transform Controls
   const propX = document.getElementById('prop-x');
   const propY = document.getElementById('prop-y');
   const propRotation = document.getElementById('prop-rotation');
   const propFontSizeNum = document.getElementById('prop-font-size-num');
-  
+
   // 2. Typography Controls
   const propFontFamily = document.getElementById('prop-font-family');
   const propFontWeight = document.getElementById('prop-font-weight');
@@ -51,12 +55,12 @@ document.addEventListener('DOMContentLoaded', () => {
   const valLetterSpacing = document.getElementById('val-letter-spacing');
   const propLineHeight = document.getElementById('prop-line-height');
   const valLineHeight = document.getElementById('val-line-height');
-  
+
   // 3. Color Controls
   const propFillColor = document.getElementById('prop-fill-color');
   const propFillColorHex = document.getElementById('prop-fill-color-hex');
   const fillPreviewBtn = document.getElementById('fill-color-preview');
-  
+
   // 4. Stroke Controls
   const propStrokeEnable = document.getElementById('prop-stroke-enable');
   const strokeSettingsBlock = document.getElementById('stroke-settings-block');
@@ -103,11 +107,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const propGridSize = document.getElementById('prop-grid-size');
   const valGridSize = document.getElementById('val-grid-size');
   const gridSizeBlock = document.getElementById('grid-size-block');
-  
+
   const bgFiltersBlock = document.getElementById('bg-image-filters-block');
   const bgEmptyFilters = document.getElementById('bg-image-empty-filters');
   const btnRemoveBg = document.getElementById('btn-remove-bg');
-  
+
   const propBgImgOpacity = document.getElementById('prop-bg-image-opacity');
   const valBgImgOpacity = document.getElementById('val-bg-image-opacity');
   const propBgImgBlur = document.getElementById('prop-bg-image-blur');
@@ -123,6 +127,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Initialize Editor & Interaction controller
   const editor = new ThumbnailEditor(canvasEl);
   const interaction = new InteractionController(editor, interactionOverlay, inPlaceEditor);
+  interaction.onRequestTextEdit = () => {
+    if (!propText || propText.disabled) return;
+    propText.focus();
+    propText.select();
+  };
 
   // Setup fonts inside UI selectors
   populateFontSelector();
@@ -139,10 +148,10 @@ document.addEventListener('DOMContentLoaded', () => {
     img.onload = () => {
       editor.backgroundImage = img;
       editor.backgroundImageSrc = 'demo_background.png';
-      
+
       // Add the text layer silently without intermediate history saves
       const layerId = editor.addTextLayer('DISEÑO PRO', false);
-      
+
       // Set styling
       editor.updateLayerProperty(layerId, 'fontFamily', 'Anton');
       editor.updateLayerProperty(layerId, 'fontSize', 130);
@@ -155,12 +164,12 @@ document.addEventListener('DOMContentLoaded', () => {
       editor.updateLayerProperty(layerId, 'shadowBlur', 20);
       editor.updateLayerProperty(layerId, 'shadowOffsetX', 8);
       editor.updateLayerProperty(layerId, 'shadowOffsetY', 8);
-      
+
       const activeLayer = editor.layers.find(l => l.id === layerId);
       if (activeLayer) {
         editor.measureLayer(activeLayer);
       }
-      
+
       // Save history and update UI once
       editor.saveHistory();
       zoomToFit();
@@ -260,11 +269,11 @@ document.addEventListener('DOMContentLoaded', () => {
   function setZoom(newZoom) {
     // Bound zoom between 10% and 800%
     editor.zoom = Math.max(0.1, Math.min(8.0, newZoom));
-    
+
     // Reset panning on direct zoom choices to keep centered
     editor.panX = 0;
     editor.panY = 0;
-    
+
     updateViewportTransform();
     syncZoomUI();
   }
@@ -292,11 +301,11 @@ document.addEventListener('DOMContentLoaded', () => {
     const vW = workspaceViewport.clientWidth - 40;
     const vH = workspaceViewport.clientHeight - 40;
     const scale = Math.min(vW / editor.logicalWidth, vH / editor.logicalHeight);
-    
+
     editor.zoom = Math.max(0.1, Math.min(1.5, scale)); // Fit max zoom 150%
     editor.panX = 0;
     editor.panY = 0;
-    
+
     updateViewportTransform();
     syncZoomUI();
   }
@@ -304,7 +313,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function updateViewportTransform() {
     // Apply zoom & pan translation to canvas container CSS transform
     canvasContainer.style.transform = `translate(${editor.panX}px, ${editor.panY}px) scale(${editor.zoom})`;
-    
+
     // Pixelated rendering look at zoom levels larger than 150% (Photoshop style)
     if (editor.zoom > 1.5) {
       canvasEl.style.imageRendering = 'pixelated';
@@ -317,7 +326,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const pct = Math.round(editor.zoom * 100);
     // Find closest match in dropdown or create/update a temporary text representation
     zoomSelect.value = zoomSelect.querySelector(`option[value="${editor.zoom}"]`) ? editor.zoom : 'fit';
-    
+
     // Update select label visually
     const selectedOpt = zoomSelect.options[zoomSelect.selectedIndex];
     if (selectedOpt && selectedOpt.value === 'fit') {
@@ -343,7 +352,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // (for example selectLayer/deleteLayer), without going through the DOM
     // blur handler. Never leave a visible textarea orphaned in that case.
     if (editor.editingState !== 'editing' && interaction.hasOpenInPlaceEditor()) {
-      interaction.closeInPlaceEditor();
+      interaction.closeTextEditorUI(true);
     }
     if (editor.editingState === 'editing') {
       return;
@@ -354,11 +363,15 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 2. Active Layer selection
     const activeLayer = editor.layers.find(l => l.id === editor.selectedLayerId);
-    
+
     if (activeLayer) {
       propertiesControls.classList.remove('hidden');
       propertiesEmptyState.classList.add('hidden');
       btnDeleteLayer.disabled = false;
+      propText.value = activeLayer.text ?? '';
+      propText.disabled = activeLayer.isLocked;
+      propClearText.disabled = activeLayer.isLocked;
+      propDeleteText.disabled = activeLayer.isLocked;
 
       // Populate Text Properties
       propX.value = Math.round(activeLayer.x);
@@ -371,7 +384,7 @@ document.addEventListener('DOMContentLoaded', () => {
       valLetterSpacing.textContent = activeLayer.letterSpacing;
       propLineHeight.value = activeLayer.lineHeight;
       valLineHeight.textContent = activeLayer.lineHeight;
-      
+
       btnItalic.classList.toggle('active', activeLayer.fontStyle === 'italic');
 
       // Colors
@@ -445,6 +458,10 @@ document.addEventListener('DOMContentLoaded', () => {
       propertiesControls.classList.add('hidden');
       propertiesEmptyState.classList.remove('hidden');
       btnDeleteLayer.disabled = true;
+      propText.value = '';
+      propText.disabled = true;
+      propClearText.disabled = true;
+      propDeleteText.disabled = true;
     }
 
     // 3. Background filters sync
@@ -537,6 +554,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       // Select Layer
       item.addEventListener('click', () => {
+        interaction.closeTextEditorUI(true);
         editor.selectLayer(layer.id);
       });
 
@@ -573,7 +591,7 @@ document.addEventListener('DOMContentLoaded', () => {
   // -------------------------------------------------------------
   // EVENT LISTENERS FOR LAYER PROPERTIES UPDATES (DEBOUNCED/DIRECT)
   // -------------------------------------------------------------
-  
+
   function updateActiveProperty(prop, val, saveHist = true) {
     if (editor.selectedLayerId) {
       editor.updateLayerProperty(editor.selectedLayerId, prop, val);
@@ -583,10 +601,64 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  propText.addEventListener('focus', () => {
+    if (editor.selectedLayerId) {
+      editor.startEditing(editor.selectedLayerId);
+    }
+  });
+
+  propText.addEventListener('input', () => {
+    if (!editor.selectedLayerId) return;
+    if (editor.editingState !== 'editing') {
+      editor.startEditing(editor.selectedLayerId);
+    }
+    editor.updateText(editor.selectedLayerId, propText.value);
+  });
+
+  propText.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      interaction.closeTextEditorUI(true);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      interaction.closeTextEditorUI(false);
+    }
+  });
+
+  propText.addEventListener('blur', () => {
+    if (editor.editingState === 'editing') {
+      interaction.closeTextEditorUI(true);
+    }
+  });
+
+  propAddText.addEventListener('click', () => {
+    interaction.closeTextEditorUI(true);
+    editor.addTextLayer();
+    syncUI();
+    propText.focus();
+    propText.select();
+  });
+
+  propClearText.addEventListener('click', () => {
+    if (!editor.selectedLayerId) return;
+    interaction.closeTextEditorUI(true);
+    editor.updateText(editor.selectedLayerId, '');
+    editor.saveHistory();
+    syncUI();
+    propText.focus();
+  });
+
+  propDeleteText.addEventListener('click', () => {
+    if (!editor.selectedLayerId) return;
+    interaction.closeTextEditorUI(true);
+    editor.deleteLayer(editor.selectedLayerId);
+    syncUI();
+  });
+
   // Positional numeric updates
   propX.addEventListener('input', () => updateActiveProperty('x', parseFloat(propX.value) || 0, false));
   propX.addEventListener('change', () => editor.saveHistory());
-  
+
   propY.addEventListener('input', () => updateActiveProperty('y', parseFloat(propY.value) || 0, false));
   propY.addEventListener('change', () => editor.saveHistory());
 

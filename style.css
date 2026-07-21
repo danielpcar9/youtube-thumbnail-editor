@@ -639,6 +639,45 @@ input:checked + .slider:before {
   white-space: pre-wrap;
 }
 
+.text-content-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 18px;
+}
+
+.text-content-input {
+  width: 100%;
+  min-height: 92px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--input-bg);
+  color: var(--text-main);
+  font: inherit;
+  line-height: 1.35;
+  resize: vertical;
+  box-sizing: border-box;
+}
+
+.text-content-input:focus {
+  outline: none;
+  border-color: var(--border-focus);
+}
+
+.text-content-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.text-content-actions .btn {
+  flex: 1;
+}
+
+.text-delete-button {
+  width: 100%;
+}
+
 /* Smart Snapping guides */
 .smart-guide-line {
   position: absolute;

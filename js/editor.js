@@ -30,7 +30,7 @@ export class ThumbnailEditor {
       contrast: 100,
       saturate: 100
     };
-    
+
     this.zoom = 1.0; // 0.1 to 8.0
     this.panX = 0;
     this.panY = 0;
@@ -201,7 +201,7 @@ export class ThumbnailEditor {
   // Restore state from history
   restoreState(state) {
     if (!state) return;
-    
+
     // If active editing, cancel it cleanly
     if (this.editingState === 'editing') {
       this.cancelEditing();
@@ -295,7 +295,7 @@ export class ThumbnailEditor {
       alignment: 'center',
       letterSpacing: 2,
       lineHeight: 1.2,
-      
+
       strokeEnabled: true,
       strokeColor: '#000000',
       strokeWidth: 10,
@@ -324,7 +324,7 @@ export class ThumbnailEditor {
     this.measureLayer(newLayer);
     newLayer.x = (this.logicalWidth - newLayer.width) / 2;
     newLayer.y = (this.logicalHeight - newLayer.height) / 2;
-    
+
     if (save) {
       this.saveHistory();
     }
@@ -447,7 +447,7 @@ export class ThumbnailEditor {
   measureLayer(layer) {
     const ctx = this.measureCtx;
     ctx.save();
-    
+
     // Set font style
     const weight = layer.fontWeight || 'normal';
     const style = layer.fontStyle || 'normal';
@@ -459,7 +459,7 @@ export class ThumbnailEditor {
 
     const lines = layer.text.split('\n');
     let maxWidth = 0;
-    
+
     lines.forEach(line => {
       const metrics = ctx.measureText(line);
       if (metrics.width > maxWidth) {
@@ -480,7 +480,7 @@ export class ThumbnailEditor {
 
     // Assign width and height
     layer.width = Math.max(20, Math.ceil(maxWidth));
-    
+
     const count = lines.length;
     const spacingHeight = layer.fontSize * layer.lineHeight;
     layer.height = Math.max(20, Math.ceil((count - 1) * spacingHeight + layer.fontSize));
@@ -524,18 +524,18 @@ export class ThumbnailEditor {
     // 2. Draw Background Image (with filters)
     if (this.backgroundImage) {
       ctx.save();
-      
+
       const s = this.backgroundImageSettings;
       const filters = [];
       if (s.blur > 0) filters.push(`blur(${s.blur}px)`);
       if (s.brightness !== 100) filters.push(`brightness(${s.brightness}%)`);
       if (s.contrast !== 100) filters.push(`contrast(${s.contrast}%)`);
       if (s.saturate !== 100) filters.push(`saturate(${s.saturate}%)`);
-      
+
       if (filters.length > 0) {
         ctx.filter = filters.join(' ');
       }
-      
+
       ctx.globalAlpha = s.opacity / 100;
 
       if (s.scaleMode === 'cover') {
@@ -639,12 +639,12 @@ export class ThumbnailEditor {
       ctx.save();
       ctx.fillStyle = layer.backgroundColor;
       ctx.globalAlpha = layer.backgroundOpacity;
-      
+
       const rectX = -padding;
       const rectY = -padding;
       const rectW = layer.width + padding * 2;
       const rectH = layer.height + padding * 2;
-      
+
       ctx.beginPath();
       const radius = 8;
       ctx.roundRect(rectX, rectY, rectW, rectH, radius);
@@ -715,16 +715,16 @@ export class ThumbnailEditor {
   // Export Canvas
   exportImage(format = 'png', quality = 0.95) {
     const mimeType = format === 'jpeg' || format === 'jpg' ? 'image/jpeg' : 'image/png';
-    
+
     if (mimeType === 'image/jpeg') {
       const tempCanvas = document.createElement('canvas');
       tempCanvas.width = this.logicalWidth;
       tempCanvas.height = this.logicalHeight;
       const tempCtx = tempCanvas.getContext('2d');
-      
+
       tempCtx.fillStyle = '#000000';
       tempCtx.fillRect(0, 0, this.logicalWidth, this.logicalHeight);
-      
+
       if (this.backgroundImage) {
         tempCtx.save();
         const s = this.backgroundImageSettings;
@@ -735,7 +735,7 @@ export class ThumbnailEditor {
         if (s.saturate !== 100) filters.push(`saturate(${s.saturate}%)`);
         if (filters.length > 0) tempCtx.filter = filters.join(' ');
         tempCtx.globalAlpha = s.opacity / 100;
-        
+
         if (s.scaleMode === 'cover') {
           const imgRatio = this.backgroundImage.width / this.backgroundImage.height;
           const canvasRatio = this.logicalWidth / this.logicalHeight;
@@ -788,7 +788,6 @@ export class ThumbnailEditor {
     return this.canvas.toDataURL('image/png');
   }
 
-  // Global Invariants Assert Method
   assertEditorInvariants() {
     // 1. Unique IDs
     const ids = this.layers.map(l => l.id);
@@ -829,6 +828,18 @@ export class ThumbnailEditor {
     const textareas = document.querySelectorAll('#in-place-editor');
     if (textareas.length !== 1) {
       throw new Error(`Invariante violado: se encontraron ${textareas.length} textareas de edición en lugar de exactamente 1.`);
+    }
+
+    // 7. No visible textarea pointing to deleted layer or active when editor state is idle
+    const inlineEditor = document.getElementById('in-place-editor');
+    if (inlineEditor && !inlineEditor.classList.contains('hidden')) {
+      if (this.editingState === 'idle') {
+        throw new Error("Invariante violado: inline textarea visible pero editor.editingState es idle.");
+      }
+      const editingLayer = this.layers.find(l => l.id === this.editingLayerId);
+      if (!editingLayer) {
+        throw new Error("Invariante violado: inline textarea visible apuntando a una capa inexistente.");
+      }
     }
 
     return true;

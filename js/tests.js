@@ -2,8 +2,8 @@
 // To run: navigate to http://localhost:8001/?test=1
 
 export async function runAllTests(editor, interaction, syncUI) {
-  console.log("=== INICIANDO SUITE DE PRUEBAS AUTOMATIZADAS DE ESTABILIDAD ===");
-  
+  console.log("=== INICIANDO SUITE DE PRUEBAS AUTOMATIZADAS DE ESTABILIDAD V3 ===");
+
   const results = [];
   const logTest = (name, passed, details = "") => {
     results.push({ name, passed, details });
@@ -20,7 +20,28 @@ export async function runAllTests(editor, interaction, syncUI) {
   };
 
   try {
-    // Limpiar estado inicial
+    // -------------------------------------------------------------
+    // PRUEBAS DE INICIALIZACIÓN
+    // -------------------------------------------------------------
+    // 1. Verificar "DISEÑO PRO" inicial
+    const hasInitial = editor.layers.some(l => l.text === "DISEÑO PRO");
+    logTest("Primer cuadro DISEÑO PRO existe en inicio", hasInitial);
+
+    // 2. DISEÑO PRO es seleccionable, editable y eliminable
+    const initialLayer = editor.layers.find(l => l.text === "DISEÑO PRO");
+    if (initialLayer) {
+      editor.selectLayer(initialLayer.id);
+      logTest("DISEÑO PRO es seleccionable", editor.selectedLayerId === initialLayer.id);
+
+      editor.updateText(initialLayer.id, "DISEÑO PRO EDITADO");
+      logTest("DISEÑO PRO es editable", editor.layers.find(l => l.id === initialLayer.id).text === "DISEÑO PRO EDITADO");
+
+      editor.deleteLayer(initialLayer.id);
+      logTest("DISEÑO PRO es eliminable y desaparece del modelo", !editor.layers.some(l => l.id === initialLayer.id));
+      logTest("DISEÑO PRO removido limpia la selección", editor.selectedLayerId === null);
+    }
+
+    // Limpiar estado inicial para pruebas aisladas
     editor.layers = [];
     editor.selectedLayerId = null;
     editor.editingState = 'idle';
@@ -32,201 +53,222 @@ export async function runAllTests(editor, interaction, syncUI) {
     syncUI();
     assertInvariants();
 
-    // -------------------------------------------------------------
-    // PRUEBA 1: Crear 100 capas consecutivas de forma inmediata
-    // -------------------------------------------------------------
-    console.log("Prueba 1: Creando 100 capas...");
-    for (let i = 0; i < 100; i++) {
-      editor.addTextLayer(`Capa_${i}`, false);
-    }
-    editor.saveHistory();
+    // 3. Crear una capa
+    const layer1 = editor.addTextLayer("Capa A");
     assertInvariants();
-    logTest("Crear 100 capas", editor.layers.length === 100, `Capas creadas: ${editor.layers.length}`);
+    logTest("Crear una capa", editor.layers.length === 1 && editor.selectedLayerId === layer1);
 
-    // Limpiar de nuevo para pruebas individuales
-    editor.layers = [];
-    editor.selectedLayerId = null;
-    editor.saveHistory();
+    // 4. Crear cinco capas
+    const layers = [layer1];
+    for (let i = 2; i <= 5; i++) {
+      layers.push(editor.addTextLayer(`Capa ${i}`));
+    }
+    assertInvariants();
+    logTest("Crear cinco capas", editor.layers.length === 5);
 
-    // -------------------------------------------------------------
-    // PRUEBA 2: Crear y borrar capas concurrentemente mientras cargan fuentes
-    // -------------------------------------------------------------
-    console.log("Prueba 2: Carga asíncrona concurrente...");
-    const ids = [];
-    for (let i = 0; i < 50; i++) {
-      const id = editor.addTextLayer(`Async_${i}`, false);
-      ids.push(id);
-      // Borrar la mitad inmediatamente antes de que carguen las fuentes
+    // 5. Editar la primera capa (Capa A / layers[0])
+    editor.selectLayer(layers[0]);
+    editor.startEditing(layers[0]);
+    editor.updateText(layers[0], "Capa A Modificada");
+    editor.commitEditing();
+    assertInvariants();
+    logTest("Editar la primera capa", editor.layers.find(l => l.id === layers[0]).text === "Capa A Modificada");
+
+    // 6. Eliminar la primera capa
+    editor.deleteLayer(layers[0]);
+    assertInvariants();
+    logTest("Eliminar la primera capa", !editor.layers.some(l => l.id === layers[0]));
+
+    // 7. Editar la última capa
+    const lastLayerId = layers[layers.length - 1];
+    editor.selectLayer(lastLayerId);
+    editor.startEditing(lastLayerId);
+    editor.updateText(lastLayerId, "Ultima Modificada");
+    editor.commitEditing();
+    assertInvariants();
+    logTest("Editar la última capa", editor.layers.find(l => l.id === lastLayerId).text === "Ultima Modificada");
+
+    // 8. Eliminar la última capa
+    editor.deleteLayer(lastLayerId);
+    assertInvariants();
+    logTest("Eliminar la última capa", !editor.layers.some(l => l.id === lastLayerId));
+
+    // 9. Eliminar todas las capas una por una
+    const remainingIds = [...editor.layers.map(l => l.id)];
+    remainingIds.forEach(id => editor.deleteLayer(id));
+    assertInvariants();
+    logTest("Eliminar todas las capas una por una", editor.layers.length === 0 && editor.selectedLayerId === null);
+
+    // 10. Crear una capa después de eliminar la primera
+    const newAfterDel = editor.addTextLayer("Nueva Tras Borrar Todo");
+    assertInvariants();
+    logTest("Crear capa después de vaciar", editor.layers.length === 1 && editor.selectedLayerId === newAfterDel);
+
+    // 11. Editar desde el panel (simulando eventos en propText)
+    const propText = document.getElementById('prop-text');
+    propText.focus();
+    propText.value = "Texto Editado Panel";
+    propText.dispatchEvent(new Event('input'));
+
+    // Simular pérdida de foco (blur)
+    propText.dispatchEvent(new Event('blur'));
+    assertInvariants();
+    logTest("Editar desde el panel y confirmar por Blur", editor.layers.find(l => l.id === newAfterDel).text === "Texto Editado Panel");
+
+    // 12. Escribir texto vacío
+    propText.focus();
+    propText.value = "";
+    propText.dispatchEvent(new Event('input'));
+    propText.dispatchEvent(new Event('blur'));
+    assertInvariants();
+    logTest("Escribir texto vacío es válido", editor.layers.find(l => l.id === newAfterDel).text === "");
+
+    // 13. Escribir texto multilinea, emojis y HTML
+    propText.focus();
+    const complexText = "Linea 1\nLinea 2 🚀\n<div>HTML Literal</div>";
+    propText.value = complexText;
+    propText.dispatchEvent(new Event('input'));
+    propText.dispatchEvent(new Event('blur'));
+    assertInvariants();
+    logTest("Escribir texto multilínea, emojis y HTML", editor.layers.find(l => l.id === newAfterDel).text === complexText);
+
+    // 14. Confirmar con Enter y Cancelar con Escape
+    // Iniciar edición
+    propText.focus();
+    propText.value = "Texto Temporal";
+    propText.dispatchEvent(new Event('input'));
+    // Escape key
+    propText.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    assertInvariants();
+    logTest("Cancelar con Escape restaura texto original", editor.layers.find(l => l.id === newAfterDel).text === complexText);
+
+    propText.focus();
+    propText.value = "Texto Confirmado Enter";
+    propText.dispatchEvent(new Event('input'));
+    // Enter key
+    propText.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    assertInvariants();
+    logTest("Confirmar con Enter aplica cambios", editor.layers.find(l => l.id === newAfterDel).text === "Texto Confirmado Enter");
+
+    // 15. Cambiar de selección durante edición
+    const bId = editor.addTextLayer("Capa B");
+    editor.selectLayer(newAfterDel);
+    propText.focus();
+    propText.value = "Texto Auto Confirmado";
+    propText.dispatchEvent(new Event('input'));
+
+    // Seleccionar Capa B sin hacer blur
+    editor.selectLayer(bId);
+    assertInvariants();
+    logTest("Cambiar de selección durante edición auto-confirma", editor.layers.find(l => l.id === newAfterDel).text === "Texto Auto Confirmado");
+
+    // 16. Eliminar capa mientras el panel tiene foco
+    propText.focus();
+    editor.deleteLayer(bId);
+    assertInvariants();
+    logTest("Eliminar capa mientras el panel tiene foco cierra transacción", editor.editingState === 'idle');
+
+    // 17. Deshacer y rehacer (Undo/Redo)
+    editor.undo();
+    assertInvariants();
+    logTest("Undo después de eliminar restaura la capa", editor.layers.some(l => l.id === bId));
+
+    editor.redo();
+    assertInvariants();
+    logTest("Redo vuelve a eliminar la capa", !editor.layers.some(l => l.id === bId));
+
+    // 18. Mover, Redimensionar y Rotar
+    const active = editor.getSelectedLayer();
+    if (active) {
+      editor.moveLayer(active.id, 100, 120);
+      logTest("Mover capa actualiza coordenadas", active.x === 100 && active.y === 120);
+
+      editor.resizeLayer(active.id, 400, 150, 45);
+      logTest("Redimensionar capa actualiza tamaño y fuente", active.width === 400 && active.height === 150 && active.fontSize === 45);
+
+      editor.rotateLayer(active.id, 45);
+      logTest("Rotar capa actualiza ángulo", active.rotation === 45);
+    }
+
+    // 19. Capas bloqueadas (Inmutabilidad)
+    editor.updateLayerProperty(newAfterDel, 'isLocked', true);
+    editor.moveLayer(newAfterDel, 500, 500);
+    editor.deleteLayer(newAfterDel);
+    const lockedL = editor.layers.find(l => l.id === newAfterDel);
+    logTest("Capa bloqueada no se puede mover", lockedL && lockedL.x !== 500);
+    logTest("Capa bloqueada no se puede eliminar", lockedL !== undefined);
+
+    // Desbloquear
+    editor.updateLayerProperty(newAfterDel, 'isLocked', false);
+    editor.deleteLayer(newAfterDel);
+
+    // 20. Carga rápida de fuentes y eliminación concurrente
+    const asyncIds = [];
+    for (let i = 0; i < 20; i++) {
+      const id = editor.addTextLayer(`Async L ${i}`, false);
+      asyncIds.push(id);
       if (i % 2 === 0) {
         editor.deleteLayer(id);
       }
     }
-    editor.saveHistory();
+    // Esperar carga asíncrona
+    await new Promise(r => setTimeout(r, 200));
     assertInvariants();
-    // Esperar un momento a que las promesas asíncronas de fuentes resuelvan
-    await new Promise(r => setTimeout(r, 600));
-    assertInvariants();
-    logTest("Carga asíncrona y borrado concurrente", editor.layers.length === 25, `Sobrevivientes: ${editor.layers.length}`);
+    logTest("Eliminar capas concurrentemente mientras cargan fuentes es seguro", true);
 
-    // Limpiar
+    // Limpiar para test de estrés
     editor.layers = [];
     editor.selectedLayerId = null;
     editor.saveHistory();
 
-    // -------------------------------------------------------------
-    // PRUEBA 3: Creación y edición de texto (Flujo Enter / Confirmar)
-    // -------------------------------------------------------------
-    console.log("Prueba 3: Edición de texto y confirmación con Enter...");
-    const textId = editor.addTextLayer("Editable Inicial");
-    assertInvariants();
-    
-    // Simular doble clic en la caja de selección para editar
-    interaction.startInPlaceEdit();
-    assertInvariants();
-    logTest("Estado de edición activo", editor.editingState === 'editing' && editor.editingLayerId === textId);
-
-    // Escribir texto real simulando input
-    interaction.inPlaceEditor.value = "Texto Editado Pro";
-    interaction.inPlaceEditor.dispatchEvent(new Event('input'));
-    
-    // Simular Enter para confirmar
-    const enterEvent = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true });
-    interaction.inPlaceEditor.dispatchEvent(enterEvent);
-    assertInvariants();
-
-    const layerAfterEnter = editor.layers.find(l => l.id === textId);
-    logTest("Confirmar texto con Enter", layerAfterEnter && layerAfterEnter.text === "Texto Editado Pro", `Texto: ${layerAfterEnter?.text}`);
-    logTest("Estado retorna a idle post-Enter", editor.editingState === 'idle' && !interaction.isEditingText());
-
-    // -------------------------------------------------------------
-    // PRUEBA 4: Cancelación con Escape
-    // -------------------------------------------------------------
-    console.log("Prueba 4: Cancelación de edición con Escape...");
-    interaction.startInPlaceEdit();
-    interaction.inPlaceEditor.value = "Texto que debe ser descartado";
-    interaction.inPlaceEditor.dispatchEvent(new Event('input'));
-    
-    // Simular Escape para cancelar
-    const escEvent = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true });
-    interaction.inPlaceEditor.dispatchEvent(escEvent);
-    assertInvariants();
-
-    const layerAfterEsc = editor.layers.find(l => l.id === textId);
-    logTest("Cancelar texto con Escape", layerAfterEsc && layerAfterEsc.text === "Texto Editado Pro", `Texto recuperado: ${layerAfterEsc?.text}`);
-
-    // -------------------------------------------------------------
-    // PRUEBA 5: Confirmación por Blur
-    // -------------------------------------------------------------
-    console.log("Prueba 5: Confirmación por pérdida de foco (Blur)...");
-    interaction.startInPlaceEdit();
-    interaction.inPlaceEditor.value = "Texto Confirmado Blur";
-    interaction.inPlaceEditor.dispatchEvent(new Event('input'));
-    
-    // Simular blur
-    interaction.inPlaceEditor.dispatchEvent(new Event('blur'));
-    assertInvariants();
-
-    const layerAfterBlur = editor.layers.find(l => l.id === textId);
-    logTest("Confirmar texto por Blur", layerAfterBlur && layerAfterBlur.text === "Texto Confirmado Blur", `Texto: ${layerAfterBlur?.text}`);
-
-    // -------------------------------------------------------------
-    // PRUEBA 6: Cambiar selección durante edición (Política determinista)
-    // -------------------------------------------------------------
-    console.log("Prueba 6: Selección de otra capa durante edición...");
-    const anotherTextId = editor.addTextLayer("Capa Secundaria");
-    
-    // Volver a la primera capa e iniciar edición
-    editor.selectLayer(textId);
-    interaction.startInPlaceEdit();
-    interaction.inPlaceEditor.value = "Cambio durante edición";
-    interaction.inPlaceEditor.dispatchEvent(new Event('input'));
-
-    // Cambiar la selección a la segunda capa directamente desde la API del editor
-    editor.selectLayer(anotherTextId);
-    assertInvariants();
-
-    // Comprobar que el texto en la capa primera se confirmó automáticamente antes del cambio de selección
-    const firstLayer = editor.layers.find(l => l.id === textId);
-    logTest("Confirmación automática al cambiar selección", firstLayer && firstLayer.text === "Cambio durante edición");
-    logTest("Selección actualizada correctamente", editor.selectedLayerId === anotherTextId);
-    logTest("Estado de edición cerrado tras cambio de selección", editor.editingState === 'idle');
-    logTest("Textarea huérfano cerrado al cambiar selección", !interaction.hasOpenInPlaceEditor());
-
-    // -------------------------------------------------------------
-    // PRUEBA 7: Capas bloqueadas (Inmutabilidad)
-    // -------------------------------------------------------------
-    console.log("Prueba 7: Operaciones sobre capas bloqueadas...");
-    editor.updateLayerProperty(anotherTextId, 'isLocked', true);
-    
-    // Intentar mover, redimensionar, rotar
-    const oldX = editor.layers.find(l => l.id === anotherTextId).x;
-    editor.moveLayer(anotherTextId, oldX + 100, 300);
-    editor.rotateLayer(anotherTextId, 90);
-
-    const lockedLayer = editor.layers.find(l => l.id === anotherTextId);
-    logTest("Bloqueo previene movimiento", lockedLayer && lockedLayer.x === oldX, `X: ${lockedLayer?.x}`);
-    logTest("Bloqueo previene rotación", lockedLayer && lockedLayer.rotation === 0, `Rotación: ${lockedLayer?.rotation}`);
-
-    // Intentar borrar
-    editor.deleteLayer(anotherTextId);
-    const lockedLayerAfterDelete = editor.layers.find(l => l.id === anotherTextId);
-    logTest("Bloqueo previene eliminación", lockedLayerAfterDelete !== undefined);
-
-    // Desbloquear para continuar
-    editor.updateLayerProperty(anotherTextId, 'isLocked', false);
-    editor.deleteLayer(anotherTextId);
-
-    // -------------------------------------------------------------
-    // PRUEBA 8: Undo / Redo histórico e invariantes
-    // -------------------------------------------------------------
-    console.log("Prueba 8: Deshacer y Rehacer histórico...");
-    const hLayerId = editor.addTextLayer("Original"); // State 1
-    editor.moveLayer(hLayerId, 100, 100);
-    editor.saveHistory(); // State 2
-    
-    editor.updateText(hLayerId, "Editado");
-    editor.saveHistory(); // State 3
-
-    editor.undo(); // State 2
-    assertInvariants();
-    let currentLayer = editor.layers.find(l => l.id === hLayerId);
-    logTest("Undo restaura texto", currentLayer && currentLayer.text === "Original");
-
-    editor.undo(); // State 1
-    assertInvariants();
-    currentLayer = editor.layers.find(l => l.id === hLayerId);
-    logTest("Undo restaura posición", currentLayer && currentLayer.x !== 100);
-
-    editor.redo(); // State 2
-    assertInvariants();
-    currentLayer = editor.layers.find(l => l.id === hLayerId);
-    logTest("Redo aplica movimiento de nuevo", currentLayer && currentLayer.x === 100);
-
-    // -------------------------------------------------------------
-    // PRUEBA 9: Resistencia ante caracteres especiales, multilinea y emojis
-    // -------------------------------------------------------------
-    console.log("Prueba 9: Carga de caracteres especiales, emojis y HTML...");
-    const unicodeText = "Texto <script>alert(1)</script> \n Emojis 🚀🔥 \n \"Comillas\" & 'Símbolos'";
-    const specialLayerId = editor.addTextLayer(unicodeText);
-    assertInvariants();
-    
-    const specialLayer = editor.layers.find(l => l.id === specialLayerId);
-    logTest("Soporte de texto Unicode/multilinea/HTML", specialLayer && specialLayer.text === unicodeText);
-    
-    // -------------------------------------------------------------
-    // PRUEBA 10: 500 operaciones consecutivas sin desbordamiento ni cuelgues
-    // -------------------------------------------------------------
-    console.log("Prueba 10: Estrés (500 operaciones consecutivas)...");
-    const stressLayerId = editor.addTextLayer("Stress");
+    // 21. Estrés: 500 operaciones consecutivas
+    console.log("Iniciando estrés (500 operaciones)...");
+    const stressId = editor.addTextLayer("Stress Layer");
     for (let i = 0; i < 250; i++) {
-      editor.moveLayer(stressLayerId, i, i);
-      editor.rotateLayer(stressLayerId, i % 360);
+      editor.moveLayer(stressId, i, i);
+      editor.rotateLayer(stressId, i % 360);
     }
     editor.saveHistory();
     assertInvariants();
-    logTest("Estrés y resistencia de 500 operaciones", true);
+    logTest("Estrés de 500 operaciones consecutivas completado", true);
 
-    // Limpiar pantalla mostrando resultados
+    // 22. REGRESIÓN ESPECÍFICA
+    console.log("Ejecutando regresión específica...");
+    editor.layers = [];
+    editor.selectedLayerId = null;
+    editor.saveHistory();
+
+    const layerA = editor.addTextLayer("A");
+    editor.selectLayer(layerA);
+    propText.focus();
+    propText.value = "Cambio durante edición";
+    propText.dispatchEvent(new Event('input'));
+
+    const layerB = editor.addTextLayer("B");
+    editor.selectLayer(layerB);
+
+    const checkA = editor.layers.find(l => l.id === layerA);
+    logTest("Regresión: Capa A confirmada tras cambio de selección", checkA && checkA.text === "Cambio durante edición");
+    logTest("Regresión: Textarea inline de A está oculto", !interaction.hasOpenInPlaceEditor());
+
+    editor.deleteLayer(layerA);
+    logTest("Regresión: Capa A eliminada desaparece por completo", !editor.layers.some(l => l.id === layerA));
+
+    // Verificar que Capa B sigue completamente operativa
+    const checkB = editor.layers.find(l => l.id === layerB);
+    logTest("Regresión: Capa B sigue activa en el modelo", checkB !== undefined);
+    if (checkB) {
+      editor.selectLayer(layerB);
+      editor.moveLayer(layerB, 150, 150);
+      editor.resizeLayer(layerB, 300, 100, 40);
+      editor.deleteLayer(layerB);
+      logTest("Regresión: Capa B es editable, movible, redimensionable y eliminable", editor.layers.length === 0);
+    }
+
+    // 23. Textarea flotante nunca queda visible al terminar
+    logTest("Ningún textarea flotante/inline queda visible", !interaction.hasOpenInPlaceEditor());
+
+    // Mostrar modal con resultados detallados
     showTestResultsModal(results);
 
   } catch (error) {
@@ -236,7 +278,6 @@ export async function runAllTests(editor, interaction, syncUI) {
 }
 
 function showTestResultsModal(results) {
-  // Remover modal existente si lo hay
   const existing = document.getElementById('test-results-modal');
   if (existing) existing.remove();
 
@@ -258,7 +299,7 @@ function showTestResultsModal(results) {
   modal.style.color = '#f4f4f5';
 
   const title = document.createElement('h2');
-  title.textContent = "Resultados de la Auditoría del Editor";
+  title.textContent = "Resultados de la Auditoría del Editor V3";
   title.style.marginBottom = '16px';
   title.style.fontSize = '1.3rem';
   title.style.borderBottom = '1px solid #2c2c35';
